@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -232,7 +233,7 @@ def _sections_from_windows(page_texts: list[str]) -> list[Section]:
 # ------------------------------------------------------------------------ main
 
 
-def extract(
+def _extract(
     pdf_bytes: bytes,
     *,
     max_pages: int = DEFAULT_MAX_PAGES,
@@ -293,3 +294,21 @@ def extract(
         sections=sections,
         warnings=warnings,
     )
+
+
+_PYMUPDF_LOCK = threading.Lock()
+
+
+def extract(
+    pdf_bytes: bytes,
+    *,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+) -> ExtractedDoc:
+    """Extract page-tagged text and sections. Raises DocumentError for unusable files.
+
+    PyMuPDF is not documented as thread-safe, and the orchestrator reads several PDFs from
+    worker threads, so extraction is serialised. It is fast; the model calls dominate run time.
+    """
+    with _PYMUPDF_LOCK:
+        return _extract(pdf_bytes, max_pages=max_pages, max_bytes=max_bytes)

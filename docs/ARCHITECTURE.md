@@ -140,8 +140,10 @@ On Community Cloud the filesystem is ephemeral: the seed script runs at startup 
 
 ## 12. Deployment
 
-**Local:** `scripts/run_local.ps1` creates the venv, installs, seeds DB, runs `streamlit run app.py` on `127.0.0.1:8501`.
-**Community Cloud:** `requirements.txt` + `app.py` at root; DB seeded on first run; no secrets required.
+**Local:** `scripts/run_local.ps1` (creates the venv, installs, seeds the DB, runs Streamlit on port 8501;
+`-Demo` for the offline scorer). **Streamlit Community Cloud:** `requirements.txt` holds runtime packages only;
+`requirements-dev.txt` adds test and tooling packages. No secrets are needed. On any non-localhost address the app
+defaults to **session mode** (a private in-memory database per visitor); see `docs/DEPLOYMENT.md`.
 
 ## 13. Key risks and mitigations
 
@@ -156,3 +158,36 @@ On Community Cloud the filesystem is ephemeral: the seed script runs at startup 
 | Scanned PDFs | Detected, rejected with actionable message |
 | Long proposals (position bias, cost) | Full context up to threshold; section-aware retrieval beyond; EV-14 compares both; token estimate shown pre-run |
 | Retrieval misses a relevant passage | Always include summary + pricing chunks, hybrid retrieval, `W_LOW_RETRIEVAL` low-confidence flag, evidence verified against full text |
+
+## 14. As built: components added since the first design
+
+| Component | Module | Notes |
+|---|---|---|
+| Orchestrator | `core/orchestrator.py` | Generator of `ProgressEvent`s then one `RunOutcome`; thread pool of workers that only emit events; failure isolation per supplier; cancellation; formula scoring and the disqualified-supplier re-score happen on the caller's thread before ranking |
+| Formula criteria (OPT-3) | `core/tools/formula_scoring.py` | Model extracts a figure with a quote; Python scores it (`lowest_is_best`, `highest_is_best`, `threshold_bands`); missing figures, currency mismatches and bad config are flagged; a disqualified supplier is excluded from the benchmark |
+| Retrieval (OPT-5) | `core/tools/retrieval.py` | Section-aware chunks, BM25 (deduplicated query terms) fused with embeddings by reciprocal rank, opening and pricing chunks always included, results returned in page order |
+| Analyst overrides (OPT-1) | `core/overrides.py` | Rebuilds ranking inputs from the saved export, applies overrides on top of the unchanged model scores, recomputes deterministically, rewrites results atomically and appends to `score_overrides` |
+| Knock-outs (OPT-2) | `core/tools/ranking_tool.py`, `core/db.py` | Mandatory criteria with a minimum score; validation at save time; run-level toggle |
+| Eval harness | `core/evals.py`, `core/tools/recording.py` | Scores the synthetic proposals against `ground_truth.json`; record/replay so a live run can be repeated offline |
+| Provider factory / demo scorer | `core/tools/provider_factory.py`, `demo_responder.py` | `RFP_FAKE_LLM=1` offline scorer; `keyed` test hook for browser tests |
+
+### Data isolation (important for hosting)
+
+Every browser session opens **its own** SQLite connection (`ui/state.py`), so one visitor's transactions can never be
+committed by another. In session mode the database is `:memory:` and is closed on Disconnect, so criteria, runs, results and
+overrides are never visible to other visitors and never written to the server disk. In file mode (local use) the connection is
+per session but the file is shared, which is the intended single-user behaviour.
+
+### Concurrency notes
+
+- Supplier workers run in a thread pool but never touch the database or any UI object.
+- PyMuPDF extraction is serialised with a lock (the library is not documented as thread-safe).
+- SQLite uses WAL and a 5 s busy timeout for the shared-file case.
+
+### Known limitations
+
+- Retrieval relies on keyword and (optionally) embedding similarity; a fact stated in different words from the criterion text can be
+  missed. Real embeddings reduce this; the live eval (EV-14/15) should measure it with a real key.
+- Dehyphenation in the document tool joins `scal-` / `able` correctly but also removes a legitimate hyphen split across lines.
+- Scanned (image-only) PDFs are rejected, not OCR'd.
+- The OpenAI path has been unit-tested with a stand-in client but not run against the live API in this repository.

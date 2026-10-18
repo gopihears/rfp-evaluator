@@ -275,3 +275,42 @@ network drop mid-run; model dropdown empty; browser back button; two tabs; delet
 | NFR-2 | UT-R19, E2E-03/05 |
 | NFR-3 | SEC-01/02, CT-13, UT-P01/02 |
 | NFR-5 | A11Y-* |
+
+## 14. Status: what exists and what it covers (as built)
+
+**388 tests pass** (369 without a browser plus 19 Playwright), **98 % line coverage of `core/`**, `ruff` and `mypy --strict core/` clean.
+
+| Layer | Location | Covers |
+|---|---|---|
+| Unit | `tests/unit/` | Ranking, validation, document tool, DB, providers, retrieval, formulas, UI helper functions, synthetic data generator and its distinctness and ground-truth guards |
+| Property | `tests/property/` | PT-01 to PT-09: order-independence, byte-identical export, sequential ranks, bounds, monotonicity, weight-scaling invariance, validator never raises |
+| Contract | `tests/contract/` | Orchestrator with the fake provider (failures, repair, cancellation, key-leak scan), retrieval, formula, knock-out and override flows, regression tests for review defects |
+| Streamlit logic | `tests/e2e/test_app_logic.py` | Gating, key form, validation, full demo run, history, knock-out and long-document options, session isolation |
+| Browser | `tests/e2e/test_browser.py` | Real Chromium: key gate (valid and invalid), refresh and disconnect, full run, scorecard dialog, compare toggle, details and JSON download, failed supplier, history, mobile viewport, axe (no critical violations), analyst override and audit trail, knock-outs, long-document passage search, formula criteria |
+| Evals | `tests/evals/` | Metrics, record/replay, CLI; the demo scorer meets all thresholds |
+
+### Additional cases added during the build
+
+- Session isolation: runs and criteria edits are invisible to a second session; nothing is written to disk in session mode; Disconnect wipes the session DB.
+- Thread safety: 40 concurrent extractions give identical text.
+- Locale parsing of figures; the formula benchmark excludes disqualified suppliers; embeddings batching and retry.
+- Overrides: audit trail, latest wins, revert restores the original order, reinstating a disqualified supplier, determinism, every validation error, no partial writes.
+- Retrieval: planted facts at the start, middle and end of the 88-page proposal are retrieved; prompts are under 25 % of the document.
+- Injection: hidden instructions are flagged and do not raise the score.
+
+### Not covered / still to do
+
+- EV-05 (run-to-run stability), EV-09 (name bias), EV-12 (rubric on/off), EV-13 (cost and latency) need live calls with a real key.
+- EV-14/15 with **real embeddings** (the offline run uses lexical stand-in vectors).
+- Visual regression screenshots (E2E-16) and the dark-theme check (E2E-15).
+- SEC-09/10 dependency and secret scans in CI (a manual search for key-like strings was clean).
+
+### How to run
+
+```powershell
+pytest                                  # everything
+pytest -m "not browser"                 # without Chromium
+python -m core.evals --provider demo    # eval harness, offline
+$env:OPENAI_API_KEY="sk-..."; python -m core.evals --provider openai --model <model> --record rec.json
+python -m core.evals --provider replay --replay rec.json
+```

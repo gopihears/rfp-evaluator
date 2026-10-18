@@ -55,9 +55,16 @@ def choose_mode(setting: str, est_tokens: int, threshold: int) -> str:
         return "retrieval"
     return "retrieval" if est_tokens > threshold else "full"
 
+
 # Stages of one supplier, in order, with the share of that supplier's work completed.
-STAGE_PROGRESS = {"QUEUED": 0.0, "READING": 0.1, "SCORING": 0.3, "VALIDATING": 0.9,
-                  "DONE": 1.0, "FAILED": 1.0}
+STAGE_PROGRESS = {
+    "QUEUED": 0.0,
+    "READING": 0.1,
+    "SCORING": 0.3,
+    "VALIDATING": 0.9,
+    "DONE": 1.0,
+    "FAILED": 1.0,
+}
 
 
 class EvaluationInputError(ValueError):
@@ -85,9 +92,14 @@ class RunOptions:
     retrieval: str = "auto"  # auto | full | retrieve
 
     def as_json(self) -> dict[str, Any]:
-        return {"temperature": self.temperature, "enable_knockouts": self.enable_knockouts,
-                "overrides": len(self.overrides), "sensitivity": self.sensitivity,
-                "sensitivity_draws": self.sensitivity_draws, "retrieval": self.retrieval}
+        return {
+            "temperature": self.temperature,
+            "enable_knockouts": self.enable_knockouts,
+            "overrides": len(self.overrides),
+            "sensitivity": self.sensitivity,
+            "sensitivity_draws": self.sensitivity_draws,
+            "retrieval": self.retrieval,
+        }
 
 
 @dataclass(frozen=True)
@@ -121,8 +133,13 @@ def failed_scorecard(
         supplier_id=supplier.supplier_id,
         supplier_name=supplier.supplier_name,
         criteria=[
-            CriterionResult(criterion_id=c.criterion_id, score=None, max_score=c.max_score,
-                            justification="Not evaluated.", status="missing")
+            CriterionResult(
+                criterion_id=c.criterion_id,
+                score=None,
+                max_score=c.max_score,
+                justification="Not evaluated.",
+                status="missing",
+            )
             for c in criteria
         ],
         warnings=[RunWarning.make(code, message, supplier_id=supplier.supplier_id)],
@@ -159,10 +176,13 @@ class _Worker:
         try:
             run(["probe"])
         except ProviderError:
-            card_warnings.append(RunWarning.make(
-                "I_NO_EMBEDDINGS",
-                "Embeddings were unavailable; retrieval used keyword search only.",
-                supplier_id=supplier_id))
+            card_warnings.append(
+                RunWarning.make(
+                    "I_NO_EMBEDDINGS",
+                    "Embeddings were unavailable; retrieval used keyword search only.",
+                    supplier_id=supplier_id,
+                )
+            )
             return None
         return run
 
@@ -171,32 +191,54 @@ class _Worker:
         sup = upload.supplier
         judged = llm_criteria(self.criteria)
         formula = formula_criteria(self.criteria)
-        mode = choose_mode(self.options.retrieval, doc.est_tokens,
-                           self.settings.full_context_max_tokens)
+        mode = choose_mode(
+            self.options.retrieval, doc.est_tokens, self.settings.full_context_max_tokens
+        )
         extra_warnings: list[RunWarning] = []
         if not judged:
-            card = Scorecard(supplier_id=sup.supplier_id, supplier_name=sup.supplier_name,
-                             criteria=[])
+            card = Scorecard(
+                supplier_id=sup.supplier_id, supplier_name=sup.supplier_name, criteria=[]
+            )
         elif mode == "retrieval":
-            self._emit(upload, "SCORING",
-                       f"Long document ({doc.pages} pages): searching for the best passages")
-            index = Index.build(chunk_document(doc),
-                                self._embedder(extra_warnings, sup.supplier_id))
+            self._emit(
+                upload,
+                "SCORING",
+                f"Long document ({doc.pages} pages): searching for the best passages",
+            )
+            index = Index.build(
+                chunk_document(doc), self._embedder(extra_warnings, sup.supplier_id)
+            )
             card = evaluate_supplier_retrieval(
-                self.provider, model=self.options.model, criteria=judged, supplier=sup, doc=doc,
-                index=index, top_k=self.settings.retrieval_top_k,
-                temperature=self.options.temperature).scorecard
+                self.provider,
+                model=self.options.model,
+                criteria=judged,
+                supplier=sup,
+                doc=doc,
+                index=index,
+                top_k=self.settings.retrieval_top_k,
+                temperature=self.options.temperature,
+            ).scorecard
         else:
             self._emit(upload, "SCORING", f"Scoring {doc.pages} pages with the model")
             card = evaluate_supplier(
-                self.provider, model=self.options.model, criteria=judged, supplier=sup,
-                document=doc.text, temperature=self.options.temperature).scorecard
+                self.provider,
+                model=self.options.model,
+                criteria=judged,
+                supplier=sup,
+                document=doc.text,
+                temperature=self.options.temperature,
+            ).scorecard
         card.warnings.extend(extra_warnings)
         if formula and card.ok:
             self._emit(upload, "SCORING", "Reading price and schedule figures")
             facts, fact_warnings = extract_facts(
-                self.provider, model=self.options.model, criteria=formula, supplier=sup,
-                document=doc.text, temperature=self.options.temperature)
+                self.provider,
+                model=self.options.model,
+                criteria=formula,
+                supplier=sup,
+                document=doc.text,
+                temperature=self.options.temperature,
+            )
             card.facts, card.warnings = facts, card.warnings + fact_warnings
         return card
 
@@ -206,8 +248,11 @@ class _Worker:
             return failed_scorecard(sup, self.criteria, "E_CANCELLED", "The run was cancelled.")
         try:
             self._emit(upload, "READING", "Reading the PDF")
-            doc = extract(upload.pdf_bytes, max_pages=self.settings.max_pages,
-                          max_bytes=self.settings.max_bytes)
+            doc = extract(
+                upload.pdf_bytes,
+                max_pages=self.settings.max_pages,
+                max_bytes=self.settings.max_bytes,
+            )
             if self.cancel.is_set():
                 return failed_scorecard(sup, self.criteria, "E_CANCELLED", "The run was cancelled.")
             card = self._score(upload, doc)
@@ -220,8 +265,9 @@ class _Worker:
         except ProviderError as exc:
             return failed_scorecard(sup, self.criteria, exc.code, str(exc))
         except Exception as exc:  # never let one supplier take the batch down
-            return failed_scorecard(sup, self.criteria, "E_UNEXPECTED",
-                                    f"Unexpected error: {type(exc).__name__}")
+            return failed_scorecard(
+                sup, self.criteria, "E_UNEXPECTED", f"Unexpected error: {type(exc).__name__}"
+            )
 
 
 def run_evaluation(
@@ -241,8 +287,9 @@ def run_evaluation(
     if not uploads:
         raise EvaluationInputError("E_NO_SUPPLIERS", "Add at least one supplier PDF.")
     if len(uploads) > cfg.max_suppliers:
-        raise EvaluationInputError("E_TOO_MANY_SUPPLIERS",
-                                   f"A run can include at most {cfg.max_suppliers} suppliers.")
+        raise EvaluationInputError(
+            "E_TOO_MANY_SUPPLIERS", f"A run can include at most {cfg.max_suppliers} suppliers."
+        )
     ids = [u.supplier.supplier_id for u in uploads]
     if len(set(ids)) != len(ids):
         raise EvaluationInputError("E_DUPLICATE_SUPPLIER", "Supplier ids must be unique.")
@@ -254,8 +301,14 @@ def run_evaluation(
     suppliers = [u.supplier for u in uploads]
 
     run_id = db.new_run_id()
-    db.start_run(conn, run_id=run_id, created_at=now(), model=options.model,
-                 prompt_hash=prompt_hash(criteria), options=options.as_json())
+    db.start_run(
+        conn,
+        run_id=run_id,
+        created_at=now(),
+        model=options.model,
+        prompt_hash=prompt_hash(criteria),
+        options=options.as_json(),
+    )
     try:
         progress = {s.supplier_id: 0.0 for s in suppliers}
         names = {s.supplier_id: s.supplier_name for s in suppliers}
@@ -281,7 +334,8 @@ def run_evaluation(
 
         with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
             futures: dict[Future[Scorecard], SupplierUpload] = {
-                pool.submit(worker, u): u for u in uploads}
+                pool.submit(worker, u): u for u in uploads
+            }
             pending = set(futures)
             while pending:
                 done, pending = wait(pending, timeout=0.05)
@@ -291,29 +345,48 @@ def run_evaluation(
                     cards[sid] = fut.result()
                     progress[sid] = 1.0
                     stage = "DONE" if cards[sid].ok else "FAILED"
-                    message = ("Scorecard ready" if cards[sid].ok
-                               else _first_error(cards[sid]))
+                    message = "Scorecard ready" if cards[sid].ok else _first_error(cards[sid])
                     yield ProgressEvent(stage, message, pct(), sid, names[sid])
             yield from drain()
 
         cancelled = cancel.is_set()
         if cancelled:
-            cards = {s.supplier_id: failed_scorecard(s, criteria, "E_CANCELLED",
-                                                     "The run was cancelled.") for s in suppliers}
+            cards = {
+                s.supplier_id: failed_scorecard(
+                    s, criteria, "E_CANCELLED", "The run was cancelled."
+                )
+                for s in suppliers
+            }
 
         yield ProgressEvent("RANKING", "Calculating scores and ranking", 0.93)
         formula_warnings: list[RunWarning] = []
-        if not cancelled and formula_criteria(criteria):
-            # Formula criteria compare suppliers with each other, so they are scored together here.
-            scored, formula_warnings = score_formulas(
-                criteria, {sid: c.facts for sid, c in cards.items() if c.ok})
+        has_formula = not cancelled and bool(formula_criteria(criteria))
+        judged = {sid: list(c.criteria) for sid, c in cards.items()}  # before formula results
+
+        def apply_formulas(exclude: set[str]) -> list[RunWarning]:
+            """Score formula criteria across suppliers; `exclude` stays out of the benchmark."""
+            scored, warns = score_formulas(
+                criteria, {sid: c.facts for sid, c in cards.items() if c.ok}, exclude
+            )
             for sid, extra in scored.items():
-                cards[sid].criteria = sorted(cards[sid].criteria + extra,
-                                             key=lambda r: r.criterion_id)
+                cards[sid].criteria = sorted(judged[sid] + extra, key=lambda r: r.criterion_id)
+            return warns
+
+        if (
+            has_formula
+        ):  # formula criteria compare suppliers with each other, so score them together
+            formula_warnings = apply_formulas(set())
         ordered_cards = [cards[s.supplier_id] for s in suppliers]
-        rank_opts = RankOptions(enable_knockouts=options.enable_knockouts,
-                                overrides=options.overrides)
+        rank_opts = RankOptions(
+            enable_knockouts=options.enable_knockouts, overrides=options.overrides
+        )
         ranked = rank(ordered_cards, suppliers, criteria, rank_opts)
+        disqualified = {s.supplier_id for s in ranked.suppliers if s.status == "DISQUALIFIED"}
+        if has_formula and disqualified:
+            # A disqualified supplier must not set the price/time benchmark everyone else is
+            # scored against, so recompute without it and rank again.
+            formula_warnings = apply_formulas(disqualified)
+            ranked = rank(ordered_cards, suppliers, criteria, rank_opts)
         ranked.warnings.extend(formula_warnings)
         if cancelled:
             ranked.warnings.append(RunWarning.make("E_CANCELLED", "The run was cancelled."))
@@ -321,24 +394,47 @@ def run_evaluation(
         sens: dict[str, Any] | None = None
         ranked_count = sum(1 for s in ranked.suppliers if s.status == "RANKED")
         if options.sensitivity and ranked_count >= 2 and not cancelled:
-            sens = sensitivity(ordered_cards, suppliers, criteria, rank_opts,
-                               draws=options.sensitivity_draws).model_dump(mode="json")
+            sens = sensitivity(
+                ordered_cards, suppliers, criteria, rank_opts, draws=options.sensitivity_draws
+            ).model_dump(mode="json")
 
         yield ProgressEvent("SAVING", "Saving the run", 0.97)
         status = "FAILED" if cancelled else run_status(ranked)
         export = build_export(
-            run_id=run_id, created_at=_created_at(conn, run_id), status=status,
-            model=options.model, prompt_hash=prompt_hash(criteria), criteria=criteria,
-            scorecards=ordered_cards, ranked=ranked, sensitivity=sens, options=options.as_json())
-        db.persist_results(conn, run_id=run_id, status=status, criteria=criteria,
-                           scorecards=ordered_cards, ranked=ranked, export=export)
+            run_id=run_id,
+            created_at=_created_at(conn, run_id),
+            status=status,
+            model=options.model,
+            prompt_hash=prompt_hash(criteria),
+            criteria=criteria,
+            scorecards=ordered_cards,
+            ranked=ranked,
+            sensitivity=sens,
+            options=options.as_json(),
+        )
+        db.persist_results(
+            conn,
+            run_id=run_id,
+            status=status,
+            criteria=criteria,
+            scorecards=ordered_cards,
+            ranked=ranked,
+            export=export,
+        )
     except BaseException:
         db.fail_run(conn, run_id)
         raise
 
     yield ProgressEvent("COMPLETE", f"Run {status.lower()}", 1.0)
-    yield RunOutcome(run_id=run_id, status=status, ranked=ranked, scorecards=ordered_cards,
-                     export=export, criteria=criteria, cancelled=cancelled)
+    yield RunOutcome(
+        run_id=run_id,
+        status=status,
+        ranked=ranked,
+        scorecards=ordered_cards,
+        export=export,
+        criteria=criteria,
+        cancelled=cancelled,
+    )
 
 
 def _first_error(card: Scorecard) -> str:

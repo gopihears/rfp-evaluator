@@ -7,12 +7,14 @@ explainable, deterministic leaderboard.
 > **Principle:** the LLM judges proposal *content*. Python owns all arithmetic, benchmarks,
 > tie-breaks and ranking. Given the same validated scorecards, output is always identical.
 
-**Status:** Milestones 1-3 complete and working end to end: core engine, diversified synthetic RFPs with
-ground truth, document tool, OpenAI provider, evaluation agent, orchestrator, and the Streamlit app
-(connect, criteria, suppliers with live progress, leaderboard, scorecards, compare, run details,
-history, JSON export). 266 tests incl. 13 real-browser Playwright tests; 98% core coverage.
-Not yet done: live-model evals against the golden bands, long-document retrieval (OPT-5), formula
-criteria (OPT-3), analyst overrides UI, Community Cloud deployment notes.
+**Status:** feature-complete for the brief and the Should tier, working end to end. Streamlit app (connect, criteria,
+suppliers with live progress, leaderboard, scorecards, compare, run details, history, JSON export), long-document retrieval,
+formula criteria, knock-outs, analyst overrides with an audit trail, an eval harness, and hosting support.
+388 tests (19 in a real browser), 98 % core coverage, lint and strict types clean.
+
+**Honest caveats:** the OpenAI path has not been run against the live API from this repository (it is tested with stand-ins and an
+offline scorer), so scoring quality on real models is unmeasured; run `python -m core.evals --provider openai` with your key to measure it.
+Self-consistency scoring (OPT-4) and the requirements compliance matrix (OPT-6) are not built.
 
 ## Try it now
 
@@ -27,11 +29,13 @@ The demo scorer is a keyword stand-in for the model and is labelled as such in t
 ## Develop
 
 ```powershell
+pip install -r requirements-dev.txt   # runtime + test tooling
 pytest                       # everything (unit, property, contract, AppTest, browser)
 pytest -m "not browser"      # skip the Playwright tests (no Chromium needed)
 python -m playwright install chromium   # one-time, for the browser tests
 ruff check . ; mypy          # lint and type-check core/
 python -m scripts.make_synthetic_pdfs   # regenerate the fictional PDFs (deterministic)
+python -m core.evals --provider demo    # eval harness against the ground-truth bands
 ```
 
 ## Documentation
@@ -40,7 +44,8 @@ python -m scripts.make_synthetic_pdfs   # regenerate the fictional PDFs (determi
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, components, data flow, security, deployment |
 | [docs/DESIGN_SPEC.md](docs/DESIGN_SPEC.md) | Detailed design: schemas, prompts, formulas, UI screens, module contracts |
-| [docs/TEST_CASES.md](docs/TEST_CASES.md) | Test strategy and enumerated test cases (unit, property, contract, evals, E2E) |
+| [docs/TEST_CASES.md](docs/TEST_CASES.md) | Test strategy, enumerated cases and the as-built status |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Run locally and host on Streamlit Community Cloud; data handling; configuration |
 
 ## Priority tiers
 
@@ -50,7 +55,12 @@ python -m scripts.make_synthetic_pdfs   # regenerate the fictional PDFs (determi
 
 All optional features are toggles that default off, so default behaviour matches the brief exactly.
 
-## Planned stack
+## Hosting
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). On Streamlit Community Cloud each visitor gets private, in-memory data and types their own
+OpenAI key; nothing is shared between visitors or stored on the server.
+
+## Stack
 
 Streamlit · SQLite · PyMuPDF · Pydantic · OpenAI SDK (structured outputs) · Plotly · pytest · Hypothesis · Playwright
 

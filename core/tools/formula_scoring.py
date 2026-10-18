@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -25,7 +25,7 @@ from core.tools.validation_tool import SourceIndex
 
 FORMULA_KINDS = ("lowest_is_best", "highest_is_best", "threshold_bands")
 _CURRENCY_CODE = re.compile(r"^[A-Za-z]{3}$")
-_NUMBER = re.compile(r"-?\d[\d,]*\.?\d*")
+_NUMBER = re.compile(r"-?\d[\d.,]*")
 
 FACT_SYSTEM_PROMPT = """You extract exact figures from ONE supplier proposal. You do not score or \
 compare anything.
@@ -53,8 +53,10 @@ def fact_unit(c: Criterion) -> str:
 
 
 def formula_criteria(criteria: Sequence[Criterion]) -> list[Criterion]:
-    return sorted((c for c in criteria if c.is_active and c.criterion_type == "formula"),
-                  key=lambda c: c.criterion_id)
+    return sorted(
+        (c for c in criteria if c.is_active and c.criterion_type == "formula"),
+        key=lambda c: c.criterion_id,
+    )
 
 
 def check_formula_config(c: Criterion) -> list[str]:
@@ -93,16 +95,23 @@ def build_fact_schema(criteria: Sequence[Criterion]) -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "required": ["facts"],
-        "properties": {"facts": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False,
-            "required": ["criterion_id", "found", "value", "unit", "evidence"],
-            "properties": {
-                "criterion_id": {"type": "integer", "enum": ids},
-                "found": {"type": "boolean"},
-                "value": {"type": ["number", "null"]},
-                "unit": {"type": "string"},
-                "evidence": {"type": "string"},
-            }}}},
+        "properties": {
+            "facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["criterion_id", "found", "value", "unit", "evidence"],
+                    "properties": {
+                        "criterion_id": {"type": "integer", "enum": ids},
+                        "found": {"type": "boolean"},
+                        "value": {"type": ["number", "null"]},
+                        "unit": {"type": "string"},
+                        "evidence": {"type": "string"},
+                    },
+                },
+            }
+        },
     }
 
 
@@ -110,8 +119,10 @@ def build_fact_prompt(criteria: Sequence[Criterion], document: str) -> str:
     lines = ["FACTS TO EXTRACT"]
     for c in formula_criteria(criteria):
         unit = fact_unit(c)
-        lines.append(f"- criterion_id {c.criterion_id}: {fact_label(c)}"
-                     + (f" (expected unit: {unit})" if unit else ""))
+        lines.append(
+            f"- criterion_id {c.criterion_id}: {fact_label(c)}"
+            + (f" (expected unit: {unit})" if unit else "")
+        )
     safe = document.replace("</document>", "< /document>").replace("<document>", "< document>")
     return "\n".join(lines) + f"\n\n<document>\n{safe}\n</document>\n\nJSON only."
 
@@ -123,11 +134,19 @@ def _to_number(value: Any) -> float | None:
         return float(value) if math.isfinite(float(value)) else None
     if isinstance(value, str):
         match = _NUMBER.search(value.replace(" ", " "))
-        if match:
-            try:
-                return float(Decimal(match.group().replace(",", "")))
-            except InvalidOperation:
-                return None
+        if not match:
+            return None
+        raw = match.group().rstrip(".,")
+        if re.fullmatch(r"-?\d{1,3}(\.\d{3})+", raw):  # 1.420.000 -> dots are thousands
+            raw = raw.replace(".", "")
+        elif re.fullmatch(r"-?\d{1,3}(\.\d{3})*,\d{1,2}", raw):  # 1.420,50 -> decimal comma
+            raw = raw.replace(".", "").replace(",", ".")
+        elif re.fullmatch(r"-?\d+,\d{1,2}", raw):  # 1420,5
+            raw = raw.replace(",", ".")
+        try:
+            return float(Decimal(raw.replace(",", "")))
+        except InvalidOperation:
+            return None
     return None
 
 
@@ -163,8 +182,15 @@ def parse_facts(
         e = by_id.get(c.criterion_id)
         if e is None or e.get("found") is False and e.get("value") is None:
             warn("W_FACT_MISSING", f"No figure found for '{label}'.", c.criterion_id)
-            facts.append(ExtractedFact(criterion_id=c.criterion_id, label=label, unit=unit,
-                                       value=None, status="missing"))
+            facts.append(
+                ExtractedFact(
+                    criterion_id=c.criterion_id,
+                    label=label,
+                    unit=unit,
+                    value=None,
+                    status="missing",
+                )
+            )
             continue
         value = _to_number(e.get("value"))
         evidence = str(e.get("evidence") or "").strip()[:600]
@@ -172,21 +198,41 @@ def parse_facts(
         got_unit = str(e.get("unit") or "").strip()
         status: str = "ok"
         if value is None or value < 0:
-            warn("W_FACT_INVALID", f"The figure for '{label}' was not a usable number.",
-                 c.criterion_id)
+            warn(
+                "W_FACT_INVALID",
+                f"The figure for '{label}' was not a usable number.",
+                c.criterion_id,
+            )
             value, status = None, "invalid"
-        elif (_CURRENCY_CODE.match(unit) and _CURRENCY_CODE.match(got_unit)
-              and unit.upper() != got_unit.upper()):
-            warn("W_CURRENCY_MISMATCH",
-                 f"'{label}' is quoted in {got_unit.upper()} but {unit.upper()} is expected; "
-                 "it was left out rather than converted.", c.criterion_id)
+        elif (
+            _CURRENCY_CODE.match(unit)
+            and _CURRENCY_CODE.match(got_unit)
+            and unit.upper() != got_unit.upper()
+        ):
+            warn(
+                "W_CURRENCY_MISMATCH",
+                f"'{label}' is quoted in {got_unit.upper()} but {unit.upper()} is expected; "
+                "it was left out rather than converted.",
+                c.criterion_id,
+            )
             value, status = None, "currency_mismatch"
         if value is not None and verified is False:
-            warn("W_UNVERIFIED_EVIDENCE", f"The quote for '{label}' was not found in the document.",
-                 c.criterion_id)
-        facts.append(ExtractedFact(criterion_id=c.criterion_id, label=label, value=value,
-                                   unit=got_unit or unit, evidence=evidence,
-                                   evidence_verified=verified, status=status))
+            warn(
+                "W_UNVERIFIED_EVIDENCE",
+                f"The quote for '{label}' was not found in the document.",
+                c.criterion_id,
+            )
+        facts.append(
+            ExtractedFact(
+                criterion_id=c.criterion_id,
+                label=label,
+                value=value,
+                unit=got_unit or unit,
+                evidence=evidence,
+                evidence_verified=verified,
+                status=status,
+            )
+        )
     return facts, warnings, parsed_ok
 
 
@@ -207,10 +253,10 @@ def _score(kind: str, c: Criterion, value: float, valid: Sequence[float]) -> int
         if value <= 0:
             return None
         best = Decimal(repr(min(x for x in valid if x > 0)))
-        return _half_up(Decimal(c.max_score) * best / v)
+        return min(c.max_score, _half_up(Decimal(c.max_score) * best / v))
     if kind == "highest_is_best":
         top = Decimal(repr(max(valid)))
-        return 0 if top <= 0 else _half_up(Decimal(c.max_score) * v / top)
+        return 0 if top <= 0 else min(c.max_score, _half_up(Decimal(c.max_score) * v / top))
     params = c.formula_params or {}
     for band in params.get("bands", []):  # type: ignore[attr-defined]
         if value <= float(band["up_to"]):
@@ -221,6 +267,7 @@ def _score(kind: str, c: Criterion, value: float, valid: Sequence[float]) -> int
 def score_formulas(
     criteria: Sequence[Criterion],
     facts: Mapping[str, Sequence[ExtractedFact]],
+    exclude_from_benchmark: Collection[str] = (),
 ) -> tuple[dict[str, list[CriterionResult]], list[RunWarning]]:
     """Turn extracted figures into criterion results for every supplier."""
     results: dict[str, list[CriterionResult]] = {sid: [] for sid in facts}
@@ -229,8 +276,13 @@ def score_formulas(
         kind = str(c.formula_kind)
         per_supplier: dict[str, ExtractedFact | None] = {
             sid: next((f for f in fs if f.criterion_id == c.criterion_id), None)
-            for sid, fs in facts.items()}
-        valid = [f.value for f in per_supplier.values() if f is not None and f.value is not None]
+            for sid, fs in facts.items()
+        }
+        valid = [
+            f.value
+            for sid, f in per_supplier.items()
+            if f is not None and f.value is not None and sid not in exclude_from_benchmark
+        ]
         label, unit = fact_label(c), fact_unit(c)
         for sid, fact in per_supplier.items():
             score: int | None = None
@@ -241,19 +293,33 @@ def score_formulas(
                 u = f" {fact.unit}" if fact.unit else (f" {unit}" if unit else "")
                 if score is None:
                     why = f"'{label}' was {shown}{u}, which cannot be scored by this formula."
-                    warnings.append(RunWarning.make("W_FACT_INVALID", why, supplier_id=sid,
-                                                    criterion_id=c.criterion_id))
+                    warnings.append(
+                        RunWarning.make(
+                            "W_FACT_INVALID", why, supplier_id=sid, criterion_id=c.criterion_id
+                        )
+                    )
                 elif kind == "lowest_is_best":
-                    why = (f"{label}: {shown}{u}; lowest submitted is {_fmt(min(valid))}, "
-                           f"so the score is {score}/{c.max_score}.")
+                    why = (
+                        f"{label}: {shown}{u}; lowest submitted is {_fmt(min(valid))}, "
+                        f"so the score is {score}/{c.max_score}."
+                    )
                 elif kind == "highest_is_best":
-                    why = (f"{label}: {shown}{u}; highest submitted is {_fmt(max(valid))}, "
-                           f"so the score is {score}/{c.max_score}.")
+                    why = (
+                        f"{label}: {shown}{u}; highest submitted is {_fmt(max(valid))}, "
+                        f"so the score is {score}/{c.max_score}."
+                    )
                 else:
                     why = f"{label}: {shown}{u} falls in a band worth {score}/{c.max_score}."
-            results[sid].append(CriterionResult(
-                criterion_id=c.criterion_id, score=score, max_score=c.max_score,
-                justification=why, evidence=fact.evidence if fact else "",
-                status="ok" if score is not None else "missing",
-                evidence_verified=fact.evidence_verified if fact else None, source="formula"))
+            results[sid].append(
+                CriterionResult(
+                    criterion_id=c.criterion_id,
+                    score=score,
+                    max_score=c.max_score,
+                    justification=why,
+                    evidence=fact.evidence if fact else "",
+                    status="ok" if score is not None else "missing",
+                    evidence_verified=fact.evidence_verified if fact else None,
+                    source="formula",
+                )
+            )
     return results, warnings

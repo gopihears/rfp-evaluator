@@ -1,17 +1,7 @@
+# Runtime dependencies (what Streamlit Community Cloud installs)
 streamlit>=1.40
 pymupdf>=1.24
 pydantic>=2.7
 openai>=1.50
 plotly>=5.22
 pandas>=2.2
-reportlab>=4.2
-
-# dev / test
-pytest>=8.2
-hypothesis>=6.100
-pytest-cov>=5.0
-playwright>=1.45
-pytest-playwright>=0.5
-axe-playwright-python>=0.1.4
-ruff>=0.5
-mypy>=1.10

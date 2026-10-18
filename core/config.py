@@ -11,6 +11,7 @@ from typing import Any
 @dataclass(frozen=True)
 class Settings:
     db_path: str = "rfp.db"
+    db_mode: str = "file"  # "file" (shared on disk) or "session" (private, in memory)
     max_pages: int = 150
     max_bytes: int = 25_000_000
     full_context_max_tokens: int = 60_000
@@ -37,6 +38,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     source = os.environ if env is None else env
     defaults = Settings()
     values: dict[str, Any] = {}
+    if source.get("RFP_DB_MODE", "").strip().lower() in ("file", "session"):
+        values["db_mode"] = source["RFP_DB_MODE"].strip().lower()
     if "RFP_DB_PATH" in source and source["RFP_DB_PATH"].strip():
         values["db_path"] = source["RFP_DB_PATH"].strip()
     for var, field in _INT_FIELDS.items():

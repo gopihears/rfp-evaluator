@@ -202,7 +202,8 @@ def scorecard_dialog(export: dict[str, Any], supplier_id: str) -> None:
                 pills.append(theme.pill(f"Passages from pages {compress_pages(res['retrieved_pages'])}", "info"))
             if pills:
                 st.markdown(" ".join(pills), unsafe_allow_html=True)
-            st.markdown(f"**Why:** {res['justification'] or '_No justification given._'}")
+            st.markdown("**Why:**")
+            st.text(res["justification"] or "No justification given.")  # model text: never markdown
             if res["evidence"]:
                 bad = res["evidence_verified"] is False
                 pages = ", ".join(f"p.{p}" for p in page_refs(res["evidence"]))
@@ -221,15 +222,15 @@ def scorecard_dialog(export: dict[str, Any], supplier_id: str) -> None:
     if card["risks"]:
         st.markdown("#### Risks noted")
         for r in card["risks"]:
-            st.markdown(f"- {r}")
+            st.text(f"• {r}")
     if card["overall_summary"]:
         st.markdown("#### Summary")
-        st.write(card["overall_summary"])
+        st.text(card["overall_summary"])
     ws = warnings_for(export, supplier_id)
     if ws:
         st.markdown("#### Warnings")
         for w in ws:
-            st.caption(f"{theme.severity_icon(w['severity'])} {w['message']}")
+            st.text(f"{theme.severity_icon(w['severity'])} {w['message']}")
 
 
 # ---------------------------------------------------------------------- leaderboard

@@ -94,5 +94,10 @@ def render() -> None:
             "<li>Cleared when you disconnect or close the tab</li>"
             "<li>Sent only to OpenAI to score your documents</li></ul></div>",
             unsafe_allow_html=True)
-        st.caption(f"Status: {theme.pill('Not connected', 'warn')}"
-                   if not state.connected() else "", unsafe_allow_html=True)
+        if state.effective_db_mode() == "session":
+            st.caption("Your criteria, runs and results are private to this browser session and "
+                       "are not stored on the server. They disappear when the session ends.")
+        else:
+            st.caption("Runs and criteria are saved in a local database file on this machine.")
+        if not state.connected():
+            st.caption(f"Status: {theme.pill('Not connected', 'warn')}", unsafe_allow_html=True)

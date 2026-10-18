@@ -455,3 +455,49 @@ to all four; page counts span 2-4; the 21-page NexaWorks and 88-page Apex docume
 `ground_truth.json` (generated with the PDFs) holds, per supplier and criterion, the acceptable score band, a one-line rationale,
 structured facts (total price, timeline weeks), verbatim key facts that must appear in the document, missing information, the expected
 tiers (top: Apex, NexaWorks; middle: Orbit; bottom: BrightPath) and the negative / extended cases. It feeds EV-01, EV-02, EV-04, EV-10, EV-16.
+
+## 17. As-built notes and deviations from the design above
+
+| Area | Design said | As built |
+|---|---|---|
+| OPT status | OPT-1/2/3/5/7 "Should" | All five implemented and tested; OPT-4 (self-consistency) and OPT-6 (compliance matrix) remain "Could" and are **not** built |
+| LLM schema | `minItems`/`maxItems` on criteria | Omitted for strict-mode portability; the validation tool enforces one result per criterion |
+| Optional fields | `addressed`, `confidence` optional | Required in the strict schema (the model must fill them) |
+| Retrieval query | name + description + rubric | Same, but query **terms are deduplicated**; without this, repeated rubric words over-rewarded chunks from "Certifications" sections (planted fact ranked 27th of 136, now 2nd) |
+| Chunk labels | section of the chunk start | Section of the first **new** line, so overlap copied from a previous section cannot mislabel a chunk |
+| Formula score | `max * min / value` | Same, rounded half-up and clipped to the maximum (a supplier outside the benchmark group, i.e. disqualified, cannot exceed full marks) |
+| Knock-outs + formulas | not specified | A disqualified supplier is excluded from the formula benchmark; formulas are re-scored and the ranking recomputed once |
+| Overrides | recompute from stored data | Rebuilt from the saved export (`criteria_snapshot`, scorecards, options); the export now also stores `overrides` and `options` |
+| Persistence | one DB for the app | One connection per browser session; `RFP_DB_MODE=session` gives a private in-memory DB; default is `session` on any non-localhost address |
+| Figure label | falls back to criterion name | A blank "figure to extract" is a validation error (the label is the instruction given to the model) |
+| Warnings | class `Warning` | `RunWarning` |
+| Synthetic docs | 5 PDFs | 8 PDFs (4 brief, corrupt scan, injection probe, 21-page and 88-page realism set) plus `ground_truth.json` |
+
+### 17.1 Added warning / error codes
+
+`I_NO_EMBEDDINGS`, `W_LOW_RETRIEVAL`, `W_FACT_MISSING`, `W_FACT_INVALID`, `W_CURRENCY_MISMATCH`, `E_FORMULA_CONFIG`, `E_KNOCKOUT_CONFIG`,
+`E_RUN_FAILED`, `E_SUPPLIER_FAILED`, `E_SCORE_RANGE`, `E_REASON_REQUIRED`, `E_DUPLICATE`, `E_RUN_NOT_FOUND`, `E_UNKNOWN_SUPPLIER`, `E_UNKNOWN_CRITERION`.
+
+### 17.2 Eval harness (`python -m core.evals`)
+
+Runs against `data/synthetic_rfps/ground_truth.json` with any provider (`--provider demo|openai|replay`, `--record`, `--replay`).
+Metrics and thresholds: band accuracy within one point >= 0.85; Kendall tau against the expected order >= 0.8; JSON valid without repair >= 0.98;
+evidence grounded >= 0.95; injection probe not scored more than 1 point above its clean twin and flagged; deleting the security section lowers the
+security score by >= 2; formula figures exact >= 0.95; retrieval vs full-context agreement within one point >= 0.9. The demo scorer passes all of
+them (it is built to), which proves the harness, **not** model quality; a live run with a real key is still to be done.
+
+## 18. Code review log
+
+A review of the whole codebase found and fixed these defects (regression tests are in `tests/contract/test_review_fixes.py`):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| 1 | High (hosting) | One SQLite connection and one database were shared by all browser sessions: transactions interleaved, and criteria and run history leaked between visitors | Per-session connection; session mode keeps data private and in memory; automatic on non-localhost hosts |
+| 2 | Medium | Model- and document-derived text (justifications, risks, summary, warnings) was rendered as markdown, allowing remote images/links from a hostile proposal | Rendered with `st.text` |
+| 3 | Medium | A disqualified (often cheapest) supplier set the price/time benchmark for formula criteria | Excluded from the benchmark; formulas re-scored and ranking recomputed |
+| 4 | Medium | European number formats (`1.420.000`, `1.420,50`) parsed as `1.42` | Locale-aware parsing |
+| 5 | Medium | PDF extraction ran concurrently on worker threads although PyMuPDF is not documented as thread-safe | Serialised with a lock |
+| 6 | Low | Blank "figure to extract" silently used the criterion name as the instruction to the model | Validation error |
+| 7 | Low | BM25 over-weighted repeated query words (planted fact ranked 27th) | Deduplicated query terms |
+| 8 | Low | Chunk section label taken from overlap lines of the previous section | Label from first new line |
+| 9 | Low | No SQLite busy timeout for concurrent sessions on one file | `busy_timeout = 5000` |

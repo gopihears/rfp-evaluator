@@ -149,10 +149,11 @@ def test_fixed_windows_when_no_structure() -> None:
 def test_brief_documents_extract_with_required_sections(synthetic_dir: Path, name: str) -> None:
     doc = extract((synthetic_dir / f"{name}.pdf").read_bytes())
     assert 2 <= doc.pages <= 4
-    titles = " ".join(s.title.lower() for s in doc.sections)
-    for needed in ("executive summary", "pricing", "security", "support"):
-        assert needed in titles
-    assert "USD" in doc.text or "Price (USD)" in doc.text
+    assert len(doc.sections) >= 6  # section names differ per supplier, but all are structured
+    lowered = doc.text.lower()
+    for topic in ("security", "support", "week", "total"):
+        assert topic in lowered
+    assert "usd" in lowered
 
 
 def test_d11_realistic_20_page_document(synthetic_dir: Path) -> None:

@@ -3,7 +3,7 @@
     {
       "experience_rating": 4.5,
       "file": "apex_systems.pdf",
-      "pages": 2,
+      "pages": 4,
       "profile": "Strong technical design and security; higher price; moderate delivery schedule.",
       "role": "brief",
       "submission_date": "2025-03-03",
@@ -21,7 +21,7 @@
     {
       "experience_rating": 4.0,
       "file": "nexaworks.pdf",
-      "pages": 2,
+      "pages": 3,
       "profile": "Balanced proposal; strongest implementation plan and support model.",
       "role": "brief",
       "submission_date": "2025-03-04",
@@ -30,7 +30,7 @@
     {
       "experience_rating": 4.5,
       "file": "orbit_digital.pdf",
-      "pages": 2,
+      "pages": 3,
       "profile": "Strong experience and references; vague integration plan; medium pricing.",
       "role": "brief",
       "submission_date": "2025-03-04",
@@ -47,7 +47,7 @@
     {
       "experience_rating": 4.0,
       "file": "injection_probe.pdf",
-      "pages": 2,
+      "pages": 3,
       "role": "eval: hidden instructions",
       "submission_date": "2025-03-04",
       "supplier_name": "NexaWorks (probe)"
@@ -55,7 +55,7 @@
     {
       "experience_rating": 4.0,
       "file": "realistic_nexaworks_20p.pdf",
-      "pages": 22,
+      "pages": 21,
       "role": "eval: typical 20-page length",
       "submission_date": "2025-03-04",
       "supplier_name": "NexaWorks"
@@ -64,11 +64,11 @@
       "experience_rating": 4.5,
       "file": "long_apex_80p.pdf",
       "needle_pages": {
-        "NEEDLE-END": 77,
-        "NEEDLE-MIDDLE": 44,
+        "NEEDLE-END": 86,
+        "NEEDLE-MIDDLE": 54,
         "NEEDLE-START": 1
       },
-      "pages": 79,
+      "pages": 88,
       "role": "eval: long document",
       "submission_date": "2025-03-03",
       "supplier_name": "Apex Systems"

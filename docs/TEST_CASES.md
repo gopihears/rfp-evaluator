@@ -86,7 +86,26 @@ Hand-calculated expected values only; no test recomputes with the production for
 | UT-D03 | Encrypted PDF | `E_ENCRYPTED` |
 | UT-D04 | Image-only PDF | `E_NO_TEXT` |
 | UT-D05 | Mixed: one blank page | `W_EMPTY_PAGE`, rest extracted |
-| UT-D06 | > max pages | `E_TOO_MANY_PAGES` |
+| UT-D06 | > 150 pages | `E_TOO_MANY_PAGES` |
+| UT-D11 | ~20-page realistic PDF | Extracted in < 2 s; tokens 12–25 k; sections detected |
+| UT-D12 | PDF with outline/bookmarks | Sections follow outline |
+| UT-D13 | No outline, numbered headings | Heuristic sections found |
+| UT-D14 | Appendix headings | Sections tagged `is_appendix` |
+| UT-G01 | Chunker never splits a table; chunks 400–800 tokens ±; metadata present | Pass |
+| UT-G02 | Mode selection: 40 k tokens → full; 70 k → retrieval; forced override honoured | Pass |
+| UT-G03 | BM25 + embedding fusion on fixed fake embeddings | Deterministic top-k |
+| UT-G04 | Retrieved chunks reordered by page | Ascending |
+| UT-G05 | Summary and pricing chunks always included | Pass |
+| UT-G06 | Weak retrieval | `W_LOW_RETRIEVAL`, confidence low, not silent 0 |
+| UT-G07 | Planted needle (SOC 2 on p.71 of 90-page doc) retrieved for Security criterion | Retrieved in top-k |
+| UT-F01 | `lowest_is_best`: prices 100/125/200, max 10 | 10 / 8 / 5 |
+| UT-F02 | `highest_is_best` | Proportional |
+| UT-F03 | `threshold_bands` boundaries (inclusive/exclusive) | As configured |
+| UT-F04 | Fact missing / unparseable | `None`, `W_FACT_MISSING` |
+| UT-F05 | Currency mismatch | Excluded, `W_CURRENCY_MISMATCH` |
+| UT-F06 | Single supplier with price | Score = max |
+| UT-F07 | Formula + LLM criteria mixed in one run | Weighted correctly; trace shows source type |
+| UT-F08 | Formula criterion toggle off | Treated as absent; default behaviour equals brief |
 | UT-D07 | Repeated header/footer | Removed |
 | UT-D08 | Hyphenated line breaks | Rejoined |
 | UT-D09 | Unicode / ligatures | Preserved/normalised |
@@ -201,7 +220,10 @@ Replay mode by default (recorded responses); `--live` re-records. Thresholds fai
 | EV-11 | Missing-information handling | Unaddressed criterion scored low (≤ 3), flagged | pass |
 | EV-12 | Rubric anchors on/off | Variance lower with anchors | reported |
 | EV-13 | Cost / latency per run | Tokens, seconds | reported; budget alarm |
-| EV-14 | Long document (30 pages) with RAG fallback vs full context | Score delta ≤ 1 | OPT-5 only |
+| EV-14 | Realistic 20-page and 90-page documents: retrieval mode vs full-context mode | Per-criterion score delta ≤ 1 on ≥ 90 % of criteria; citation (page) accuracy higher or equal with retrieval | OPT-5 (Should) |
+| EV-15 | Needle facts planted at known pages (start/middle/end) in the 90-page doc | Needle-dependent criterion reflects the fact regardless of position | OPT-5 |
+| EV-16 | Formula criteria: extracted price/timeline vs ground truth | Exact match on ≥ 95 % of facts | OPT-3 |
+| EV-17 | Cost/latency for 20-page × 5 suppliers vs 90-page × 5 suppliers | Report tokens and seconds; budget alarm | NFR |
 
 ## 10. Security tests
 

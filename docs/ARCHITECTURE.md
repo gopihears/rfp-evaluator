@@ -14,9 +14,12 @@
 
 Non-goals: multi-user accounts, server-side key storage, OCR of scanned PDFs (detected and rejected).
 
-Optional features (behind toggles, default **off** so default behaviour equals the brief): analyst override,
-knock-out criteria, formula-based criteria, self-consistency, long-document retrieval fallback,
-requirements compliance matrix.
+Optional features (behind toggles, default **off** so default behaviour equals the brief). Tiers:
+**Should** – analyst override, knock-out criteria, formula-based criteria, long-document retrieval fallback, sensitivity panel;
+**Could** – self-consistency, requirements compliance matrix. See DESIGN_SPEC §1.3.
+
+Target document sizes (DESIGN_SPEC §1.4): classroom 2–4 pages; typical real proposal ≈ 20 pages (10–30) in full context;
+large proposals with appendices up to 150 pages via section-aware retrieval.
 
 ## 2. System context
 
@@ -55,6 +58,7 @@ The only outbound network call is to the OpenAI API, authenticated with the user
 | **Orchestrator** | Runs the 10-step pipeline; concurrency; progress events; failure isolation; single-transaction persist | Yes (given tool outputs) |
 | **Document Tool** | PDF → clean text with `[p.N]` markers; detects encrypted/empty/scanned/oversized; token estimate | Yes |
 | **Evaluation Agent** | Builds prompt from active criteria (+ rubric anchors); calls LLM with a dynamic JSON Schema; one repair retry | No (LLM) |
+| **Retrieval (OPT-5)** | Section-aware chunking, in-memory hybrid BM25 + embedding index per document, per-criterion top-k context; used only when a document exceeds the full-context token threshold | Yes (index/ranking); embeddings via provider |
 | **LLM Provider** | OpenAI wrapper: key validation, model list, structured-output call, backoff, error scrubbing | No |
 | **Validation Tool** | Parse JSON → Pydantic; fill missing criteria; clip scores; drop unknown ids; verify evidence against source text; flag injection patterns and outliers; emit warnings | Yes |
 | **Ranking Tool** | Absolute score, benchmarks, gaps, relative %, PPI, stable sort with tie-break, tie-break explanations, sensitivity | Yes |
@@ -101,7 +105,7 @@ caller's thread. The UI consumes events and updates `st.status`. Workers never c
 
 ## 8. Other security / safety controls
 
-- **Upload guardrails:** `%PDF` magic-byte check, size cap (25 MB), page cap (default 40), encrypted-PDF rejection, no-text detection.
+- **Upload guardrails:** `%PDF` magic-byte check, size cap (25 MB), page cap (default 150), encrypted-PDF rejection, no-text detection.
 - **Prompt injection:** document inserted inside delimiters and declared untrusted data; pattern scanner flags injection-like text as a warning; scores validated regardless.
 - **Evidence grounding:** each evidence quote fuzzy-matched against source text; failures flagged `unverified_evidence`.
 - **Cost guard:** token estimate × supplier count shown before Evaluate; hard cap configurable.
@@ -150,3 +154,5 @@ On Community Cloud the filesystem is ephemeral: the seed script runs at startup 
 | Float tie-break noise | Fixed-precision comparison |
 | Cost overruns | Pre-run estimate and cap |
 | Scanned PDFs | Detected, rejected with actionable message |
+| Long proposals (position bias, cost) | Full context up to threshold; section-aware retrieval beyond; EV-14 compares both; token estimate shown pre-run |
+| Retrieval misses a relevant passage | Always include summary + pricing chunks, hybrid retrieval, `W_LOW_RETRIEVAL` low-confidence flag, evidence verified against full text |

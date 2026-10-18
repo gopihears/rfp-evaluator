@@ -17,6 +17,14 @@ explainable, deterministic leaderboard.
 | [docs/DESIGN_SPEC.md](docs/DESIGN_SPEC.md) | Detailed design: schemas, prompts, formulas, UI screens, module contracts |
 | [docs/TEST_CASES.md](docs/TEST_CASES.md) | Test strategy and enumerated test cases (unit, property, contract, evals, E2E) |
 
+## Priority tiers
+
+- **Must:** the brief, rubric anchors, evidence verification, golden-set evals, Playwright E2E.
+- **Should:** formula-based criteria, long-document retrieval fallback (proposals up to ~150 pages), analyst overrides, knock-out criteria, sensitivity panel.
+- **Could:** self-consistency scoring, requirements compliance matrix.
+
+All optional features are toggles that default off, so default behaviour matches the brief exactly.
+
 ## Planned stack
 
 Streamlit · SQLite · PyMuPDF · Pydantic · OpenAI SDK (structured outputs) · Plotly · pytest · Hypothesis · Playwright

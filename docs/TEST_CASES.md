@@ -97,7 +97,7 @@ Hand-calculated expected values only; no test recomputes with the production for
 | UT-G04 | Retrieved chunks reordered by page | Ascending |
 | UT-G05 | Summary and pricing chunks always included | Pass |
 | UT-G06 | Weak retrieval | `W_LOW_RETRIEVAL`, confidence low, not silent 0 |
-| UT-G07 | Planted needle (SOC 2 on p.71 of 80-page doc) retrieved for Security criterion | Retrieved in top-k |
+| UT-G07 | Planted NEEDLE-END fact (SOC 2 audit, last pages of the 79-page doc) retrieved for the Security criterion | Retrieved in top-k |
 | UT-F01 | `lowest_is_best`: prices 100/125/200, max 10 | 10 / 8 / 5 |
 | UT-F02 | `highest_is_best` | Proportional |
 | UT-F03 | `threshold_bands` boundaries (inclusive/exclusive) | As configured |

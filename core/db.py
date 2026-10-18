@@ -24,8 +24,9 @@ class CriteriaError(ValueError):
         self.code = code
 
 
-def connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+def connect(path: str, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    """Open the database. Streamlit reruns scripts on varying threads, so the UI passes False."""
+    conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if path != ":memory:":
@@ -163,6 +164,12 @@ def start_run(
                 json.dumps(options or {}, sort_keys=True),
             ),
         )
+
+
+def fail_run(conn: sqlite3.Connection, run_id: str) -> None:
+    """Mark a run FAILED (used when an unexpected error interrupts it)."""
+    with conn:
+        conn.execute("UPDATE rfp_runs SET status = 'FAILED' WHERE rfp_run_id = ?", (run_id,))
 
 
 def persist_results(

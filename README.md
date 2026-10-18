@@ -7,7 +7,14 @@ explainable, deterministic leaderboard.
 > **Principle:** the LLM judges proposal *content*. Python owns all arithmetic, benchmarks,
 > tie-breaks and ranking. Given the same validated scorecards, output is always identical.
 
-**Status:** planning/scaffold stage. See `docs/` for the full design.
+**Status:** Milestone 1 complete (core models, SQLite schema + seed, validation tool, ranking tool,
+sensitivity, export; 113 tests, 97% core coverage). Next: synthetic PDFs, document tool, OpenAI provider,
+orchestrator, then the Streamlit UI. See `docs/` for the full design.
+
+```powershell
+pytest              # run the test suite
+ruff check . ; mypy # lint and type-check core/
+```
 
 ## Documentation
 

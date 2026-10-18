@@ -107,7 +107,7 @@ class Scorecard(BaseModel):
     overall_summary: str
     warnings: list[Warning]
 
-class Warning(BaseModel):
+class RunWarning(BaseModel):            # named RunWarning in code to avoid shadowing the builtin
     code: str                              # see §7 catalog
     severity: Literal["info","warn","error"]
     supplier_id: str | None

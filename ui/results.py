@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from core.export import export_json
+from core.overrides import OverrideError, OverrideRequest, apply_overrides
 from ui import charts, state, theme
 
 _PAGE_REF = re.compile(r"\[p\.\s*(\d+)\]")
@@ -70,6 +71,81 @@ def tie_break_text(export: dict[str, Any]) -> list[str]:
             for t in export["tie_break_explanations"]]
 
 
+def compress_pages(pages: list[int]) -> str:
+    """[3, 5, 6, 7, 71] -> '3, 5-7, 71'."""
+    out: list[str] = []
+    for p in sorted(set(pages)):
+        if out and out[-1].split("-")[-1] == str(p - 1):
+            out[-1] = f"{out[-1].split('-')[0]}-{p}"
+        else:
+            out.append(str(p))
+    return ", ".join(out)
+
+
+def facts_rows(export: dict[str, Any], supplier_id: str) -> list[dict[str, Any]]:
+    card = supplier_by_id(export, supplier_id)["scorecard"] or {}
+    names = charts.criteria_names(export)
+    rows = []
+    for f in card.get("facts", []):
+        value = "not found" if f["value"] is None else f"{f['value']:,.2f}".rstrip("0").rstrip(".")
+        verified = {True: "Verified", False: "Not found in document", None: ""}[f["evidence_verified"]]
+        rows.append({"Criterion": names.get(f["criterion_id"], ""), "Figure": f["label"],
+                     "Value": value, "Unit": f["unit"], "Quote check": verified})
+    return rows
+
+
+def overrides_for(export: dict[str, Any], supplier_id: str, criterion_id: int) -> list[dict[str, Any]]:
+    return [o for o in export.get("overrides", [])
+            if o["supplier_id"] == supplier_id and o["criterion_id"] == criterion_id]
+
+
+def edited_supplier_ids(export: dict[str, Any]) -> set[str]:
+    return {o["supplier_id"] for o in export.get("overrides", [])}
+
+
+def overrides_table(export: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"When": o["created_at"], "Supplier": o["supplier_name"], "Criterion": o["criterion_name"],
+             "Model score": o["original_score"], "New score": o["new_score"], "Reason": o["reason"]}
+            for o in export.get("overrides", [])]
+
+
+def _apply_override(export: dict[str, Any], supplier_id: str, criterion_id: int, score: int,
+                    reason: str) -> None:
+    try:
+        new_export = apply_overrides(state.conn(), export["rfp_run_id"],
+                                     [OverrideRequest(supplier_id, criterion_id, score, reason)])
+    except OverrideError as exc:
+        st.error(str(exc))
+        return
+    st.session_state["viewing_export"] = new_export
+    state.notice("Score updated. The ranking was recalculated and the change was logged.", "success")
+    st.rerun()
+
+
+def _override_form(export: dict[str, Any], supplier_id: str, c: dict[str, Any],
+                   res: dict[str, Any]) -> None:
+    cid = c["criterion_id"]
+    key = f"{supplier_id}_{cid}"
+    st.markdown("**Analyst override**")
+    with st.form(f"ovr_form_{key}", clear_on_submit=False):
+        f1, f2 = st.columns([1, 3])
+        new = f1.number_input("New score", min_value=0, max_value=int(c["max_score"]), step=1,
+                              value=int(c["score"] or 0), key=f"ovr_score_{key}")
+        reason = f2.text_input("Reason (required)", key=f"ovr_reason_{key}",
+                               placeholder="Why does the model's score need changing?")
+        applied = st.form_submit_button("Apply change")
+    if applied:
+        _apply_override(export, supplier_id, cid, int(new), reason)
+    reverting = (
+        c["overridden"]
+        and c["original_score"] is not None
+        and st.button("Revert to the model's score", key=f"ovr_revert_{key}")
+    )
+    if reverting:
+        _apply_override(export, supplier_id, cid, int(c["original_score"]),
+                        "Reverted to the model's score")
+
+
 # ---------------------------------------------------------------------- scorecard
 
 
@@ -89,6 +165,9 @@ def scorecard_dialog(export: dict[str, Any], supplier_id: str) -> None:
         return
 
     names = charts.criteria_names(export)
+    if card.get("evaluation_mode") == "retrieval":
+        st.info("Long document: each criterion was scored from the best-matching passages, not the "
+                "whole text. Quotes are still checked against the full document.")
     left, right = st.columns([3, 2], gap="medium")
     with left:
         st.dataframe(pd.DataFrame(criterion_rows(export, supplier_id)), hide_index=True,
@@ -97,15 +176,32 @@ def scorecard_dialog(export: dict[str, Any], supplier_id: str) -> None:
         st.plotly_chart(charts.radar(comp, names), width="stretch",
                         key=f"radar_{supplier_id}")
 
+    facts = facts_rows(export, supplier_id)
+    if facts:
+        st.markdown("#### Figures read from the proposal")
+        st.caption("The model only reads these numbers; Python turns them into scores.")
+        st.dataframe(pd.DataFrame(facts), hide_index=True, width="stretch")
+
     st.markdown("#### Evidence and reasoning")
     by_cid = {r["criterion_id"]: r for r in card["criteria"]}
+    can_edit = comp["status"] in ("RANKED", "DISQUALIFIED") and export["status"] != "FAILED"
     for c in comp["criteria"]:
         res = by_cid[c["criterion_id"]]
         label = names[c["criterion_id"]]
         score = "n/a" if c["score"] is None else f"{c['score']}/{c['max_score']}"
-        with st.expander(f"{label} - {score}"):
+        suffix = " ✎" if c["overridden"] else ""
+        with st.expander(f"{label} - {score}{suffix}"):
+            pills = []
+            if res.get("source") == "formula":
+                pills.append(theme.pill("Calculated from a figure", "info"))
+            if c["overridden"]:
+                pills.append(theme.pill("Analyst override", "warn"))
             if res["status"] != "ok":
-                st.caption(theme.pill(f"Score {res['status']}", "warn"), unsafe_allow_html=True)
+                pills.append(theme.pill(f"Score {res['status']}", "warn"))
+            if res.get("retrieved_pages"):
+                pills.append(theme.pill(f"Passages from pages {compress_pages(res['retrieved_pages'])}", "info"))
+            if pills:
+                st.markdown(" ".join(pills), unsafe_allow_html=True)
             st.markdown(f"**Why:** {res['justification'] or '_No justification given._'}")
             if res["evidence"]:
                 bad = res["evidence_verified"] is False
@@ -117,6 +213,11 @@ def scorecard_dialog(export: dict[str, Any], supplier_id: str) -> None:
                     f"</div>{badge} {theme.esc(pages)}", unsafe_allow_html=True)
             else:
                 st.caption("No supporting evidence quoted.")
+            for o in overrides_for(export, supplier_id, c["criterion_id"]):
+                st.caption(f"✎ {o['created_at']}: model score {o['original_score']} → {o['new_score']}. "
+                           f"Reason: {o['reason']}")
+            if can_edit:
+                _override_form(export, supplier_id, c, res)
     if card["risks"]:
         st.markdown("#### Risks noted")
         for r in card["risks"]:
@@ -163,7 +264,10 @@ def _leaderboard(export: dict[str, Any]) -> None:
             with st.container(border=True, key=f"lb_row_{r['rank']}"):
                 c = st.columns(widths, vertical_alignment="center")
                 c[0].markdown(f'<span class="rfp-rank">{r["rank"]}</span>', unsafe_allow_html=True)
-                c[1].markdown(f"**{theme.esc(r['supplier_name'])}**", unsafe_allow_html=True)
+                edited_mark = (" " + theme.pill("edited", "warn")
+                               if ids[r["supplier_name"]] in edited_supplier_ids(export) else "")
+                c[1].markdown(f"**{theme.esc(r['supplier_name'])}**{edited_mark}",
+                              unsafe_allow_html=True)
                 c[2].progress(min(r["absolute_score"] / 100, 1.0), text=f"{r['absolute_score']:.1f}")
                 c[3].progress(min(r["ppi"] / 100, 1.0), text=f"{r['ppi']:.1f}")
                 c[4].write(r["submission_date"])
@@ -212,14 +316,30 @@ def _details(export: dict[str, Any]) -> None:
                        file_name=f"rfp_run_{export['rfp_run_id'][:8]}.json", mime="application/json",
                        type="primary", key="download_json")
 
+    opts = export.get("options", {})
+    mode = {"auto": "automatic", "full": "full document", "retrieve": "passage search"}.get(
+        opts.get("retrieval", "auto"), "automatic")
+    st.caption(f"Long proposals: {mode} · knock-out rules: "
+               f"{'on' if opts.get('enable_knockouts') else 'off'}")
+
     st.markdown("##### Criteria used")
-    st.dataframe(pd.DataFrame([{"Criterion": c["name"], "Weight %": c["weight"], "Max": c["max_score"]}
-                               for c in export["criteria_snapshot"]]), hide_index=True, width="stretch")
+    st.dataframe(pd.DataFrame([{
+        "Criterion": c["name"], "Weight %": c["weight"], "Max": c["max_score"],
+        "Scored by": "Calculated from a figure" if c.get("criterion_type") == "formula" else "Model",
+        "Knock-out": f"minimum {c['min_score']}" if c.get("is_mandatory") else ""}
+        for c in export["criteria_snapshot"]]), hide_index=True, width="stretch")
 
     st.markdown("##### Tie-break explanations")
     texts = tie_break_text(export)
     for t in texts or ["No adjacent suppliers to compare."]:
         st.write("- " + t)
+
+    audit = overrides_table(export)
+    if audit:
+        st.markdown("##### Analyst overrides (audit trail)")
+        st.caption("The model's original scores are kept; these changes were applied on top and "
+                   "the ranking was recalculated.")
+        st.dataframe(pd.DataFrame(audit), hide_index=True, width="stretch")
 
     st.markdown("##### Warnings")
     names = {s["supplier_id"]: s["supplier_name"] for s in export["suppliers"]}

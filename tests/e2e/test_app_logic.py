@@ -159,3 +159,53 @@ def test_cancelled_run_is_reported_on_next_load(demo_app: AppTest) -> None:
     demo_app.run()
     assert any("cancelled" in w.value for w in demo_app.warning)
     assert demo_app.session_state["running"] is False
+
+
+def test_knockout_flow_through_the_criteria_and_suppliers_screens(demo_app: AppTest) -> None:
+    click(demo_app, "start_demo")
+    demo_app.checkbox(key="adv_mand_4").set_value(True).run()
+    assert demo_app.number_input(key="adv_min_4").value == 5
+    click(demo_app, "save_crit")
+    assert not demo_app.exception
+    click(demo_app, "to_suppliers")
+    click(demo_app, "load_demo")
+    ko = demo_app.toggle(key="opt_ko")
+    assert ko.value is True and not ko.disabled
+    click(demo_app, "evaluate")
+    export = demo_app.session_state["viewing_export"]
+    assert export["options"]["enable_knockouts"] is True
+    statuses = {s["supplier_name"]: s["computed"]["status"] for s in export["suppliers"]}
+    assert statuses == {"Apex Systems": "RANKED", "NexaWorks": "RANKED",
+                        "BrightPath Tech": "DISQUALIFIED", "Orbit Digital": "DISQUALIFIED"}
+    assert any("Disqualified" in m.value for m in demo_app.markdown)
+
+
+def test_knockout_toggle_is_disabled_when_no_rule_exists(demo_app: AppTest) -> None:
+    click(demo_app, "start_demo")
+    click(demo_app, "to_suppliers")
+    assert demo_app.toggle(key="opt_ko").disabled
+    assert any("No criterion is marked as a knock-out" in c.value for c in demo_app.caption)
+
+
+def test_formula_setup_is_validated_before_saving(demo_app: AppTest) -> None:
+    click(demo_app, "start_demo")
+    demo_app.radio(key="adv_type_3").set_value("Calculated from a figure").run()
+    assert any("describe the figure" in c.value for c in demo_app.caption)
+    assert demo_app.button(key="save_crit").disabled
+    demo_app.text_input(key="adv_label_3").set_value("Total price over the term").run()
+    demo_app.text_input(key="adv_unit_3").set_value("USD").run()
+    assert not demo_app.button(key="save_crit").disabled
+
+
+def test_long_sample_and_retrieval_options_on_the_suppliers_screen(demo_app: AppTest) -> None:
+    click(demo_app, "start_demo")
+    click(demo_app, "to_suppliers")
+    click(demo_app, "load_demo")
+    click(demo_app, "add_long")
+    assert len(demo_app.session_state["uploads"]) == 5
+    assert any("Long: passages are searched" in m.value for m in demo_app.markdown)
+    assert any("long document(s) detected" in c.value for c in demo_app.caption)
+    click(demo_app, "evaluate")
+    export = demo_app.session_state["viewing_export"]
+    modes = {s["supplier_name"]: s["scorecard"]["evaluation_mode"] for s in export["suppliers"]}
+    assert modes["Apex Systems (long version)"] == "retrieval" and modes["Apex Systems"] == "full"

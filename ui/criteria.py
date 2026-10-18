@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
+from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -10,6 +12,7 @@ import streamlit as st
 
 from core import db
 from core.models import Criterion
+from core.tools.formula_scoring import check_formula_config
 from ui import state, theme
 
 COLUMNS = ["id", "Active", "Name", "Description", "Weight (%)", "Max score"]
@@ -86,22 +89,87 @@ def apply_preset(df: pd.DataFrame, preset: str) -> pd.DataFrame | None:
     return out
 
 
-def frame_to_criteria(df: pd.DataFrame, existing: list[Criterion],
-                      rubrics: dict[int, dict[int, str]]) -> list[Criterion]:
+METHODS = ["Judged by the model", "Calculated from a figure"]
+KIND_LABELS = {
+    "lowest_is_best": "Lowest is best (price, delivery time)",
+    "highest_is_best": "Highest is best (coverage, uptime)",
+    "threshold_bands": "Threshold bands (set in the database)",
+}
+
+
+def advanced_defaults(c: Criterion | None) -> dict[str, Any]:
+    params = (c.formula_params or {}) if c else {}
+    return {
+        "type": c.criterion_type if c else "llm_judged",
+        "kind": (c.formula_kind if c and c.formula_kind else "lowest_is_best"),
+        "label": str(params.get("label", "")),
+        "unit": str(params.get("unit", "")),
+        "mandatory": bool(c.is_mandatory) if c else False,
+        "min_score": c.min_score if c and c.min_score is not None else 5,
+    }
+
+
+def advanced_from_state(
+    state_: Mapping[str, Any], ids: Sequence[int], existing: Sequence[Criterion]
+) -> dict[int, dict[str, Any]]:
+    """Read the per-criterion advanced widgets (falling back to the stored values)."""
+    by_id = {c.criterion_id: c for c in existing}
+    out: dict[int, dict[str, Any]] = {}
+    for cid in ids:
+        d = advanced_defaults(by_id.get(cid))
+        method = state_.get(f"adv_type_{cid}")
+        if method is not None:
+            d["type"] = "formula" if method == METHODS[1] else "llm_judged"
+        if state_.get(f"adv_kind_{cid}") in KIND_LABELS:
+            d["kind"] = state_[f"adv_kind_{cid}"]
+        d["label"] = state_.get(f"adv_label_{cid}", d["label"])
+        d["unit"] = state_.get(f"adv_unit_{cid}", d["unit"])
+        d["mandatory"] = bool(state_.get(f"adv_mand_{cid}", d["mandatory"]))
+        d["min_score"] = int(state_.get(f"adv_min_{cid}", d["min_score"]))
+        out[cid] = d
+    return out
+
+
+def frame_to_criteria(
+    df: pd.DataFrame,
+    existing: list[Criterion],
+    rubrics: dict[int, dict[int, str]],
+    advanced: dict[int, dict[str, Any]] | None = None,
+) -> list[Criterion]:
     by_id = {c.criterion_id: c for c in existing}
     out = []
     for _, row in df.iterrows():
         cid = int(row["id"])
         prior = by_id.get(cid)
+        adv = (advanced or {}).get(cid) or advanced_defaults(prior)
         rubric = {k: v.strip() for k, v in rubrics.get(cid, {}).items() if v.strip()} or None
+        formula = adv["type"] == "formula"
+        params: dict[str, object] | None = None
+        if formula:
+            params = {**((prior.formula_params or {}) if prior else {}),
+                      "label": str(adv["label"]).strip(), "unit": str(adv["unit"]).strip()}
         out.append(Criterion(
             criterion_id=cid, name=str(row["Name"]).strip(),
             description=str(row["Description"] or "").strip(),
             weight=float(row["Weight (%)"]), max_score=int(row["Max score"]),
             is_active=bool(row["Active"]), rubric=rubric,
-            is_mandatory=prior.is_mandatory if prior else False,
-            min_score=prior.min_score if prior else None,
-            criterion_type=prior.criterion_type if prior else "llm_judged"))
+            is_mandatory=bool(adv["mandatory"]),
+            min_score=int(adv["min_score"]) if adv["mandatory"] else None,
+            criterion_type="formula" if formula else "llm_judged",
+            formula_kind=str(adv["kind"]) if formula else None, formula_params=params))
+    return out
+
+
+def advanced_problems(criteria: Sequence[Criterion]) -> list[str]:
+    """Problems with formula or knock-out settings on active criteria."""
+    out: list[str] = []
+    for c in criteria:
+        if not c.is_active:
+            continue
+        if c.criterion_type == "formula":
+            out += check_formula_config(c)
+        if c.is_mandatory and (c.min_score is None or not 0 <= c.min_score <= c.max_score):
+            out.append(f"'{c.name}': the minimum score must be between 0 and {c.max_score}.")
     return out
 
 
@@ -152,7 +220,12 @@ def render() -> None:
                 "Max score": st.column_config.NumberColumn("Max", min_value=1, max_value=100, step=1),
             })
         total = active_total(edited)
-        issues = problems(edited)
+        ids = [int(i) for i in edited["id"]]
+        rubrics = {cid: {a: st.session_state.get(f"rub_{cid}_{a}", (_stored_rubric(stored, cid)).get(a, ""))
+                         for a in (2, 5, 8)} for cid in ids}
+        advanced = advanced_from_state(st.session_state, ids, stored)
+        candidate = frame_to_criteria(edited, stored, rubrics, advanced)
+        issues = problems(edited) + advanced_problems(candidate)
         ok = not issues
         st.markdown(
             f'Active weights total: <b class="rfp-num">{total}%</b> '
@@ -186,6 +259,37 @@ def render() -> None:
                     col.text_area(f"{anchor} =", value=(c.rubric or {}).get(anchor, ""), height=90,
                                   key=f"rub_{c.criterion_id}_{anchor}")
 
+        with st.expander("Scoring method and knock-out rules (optional)"):
+            st.caption("Price and delivery time are better calculated than judged: the model only "
+                       "reads the figure from each proposal and Python scores it. A knock-out "
+                       "disqualifies any supplier below a minimum score.")
+            by_stored = {c.criterion_id: c for c in stored}
+            for _, row in edited.iterrows():
+                cid = int(row["id"])
+                prior = by_stored.get(cid)
+                d = advanced_defaults(prior)
+                st.markdown(f"**{theme.esc(str(row['Name']))}**", unsafe_allow_html=True)
+                kind_options = [k for k in KIND_LABELS if k != "threshold_bands" or d["kind"] == k]
+                a1, a2 = st.columns([3, 2])
+                a1.radio("Scoring method", METHODS, index=1 if d["type"] == "formula" else 0,
+                         key=f"adv_type_{cid}", horizontal=True, label_visibility="collapsed")
+                if advanced[cid]["type"] == "formula":
+                    b1_, b2_, b3_ = st.columns([2, 3, 1])
+                    b1_.selectbox("Formula", kind_options, format_func=KIND_LABELS.get,
+                                  index=kind_options.index(d["kind"]) if d["kind"] in kind_options else 0,
+                                  key=f"adv_kind_{cid}")
+                    b2_.text_input("Figure to extract", value=d["label"], key=f"adv_label_{cid}",
+                                   placeholder="e.g. Total price over the term")
+                    b3_.text_input("Unit", value=d["unit"], key=f"adv_unit_{cid}",
+                                   placeholder="USD")
+                k1, k2 = st.columns([2, 1])
+                k1.checkbox("Knock-out: disqualify below a minimum", value=d["mandatory"],
+                            key=f"adv_mand_{cid}")
+                if advanced[cid]["mandatory"]:
+                    k2.number_input("Minimum score", min_value=0, max_value=int(row["Max score"]),
+                                    value=min(int(d["min_score"]), int(row["Max score"])), step=1,
+                                    key=f"adv_min_{cid}")
+
         with st.expander("Add a criterion"):
             n = st.text_input("Name", key="new_crit_name")
             d = st.text_input("What the model should inspect", key="new_crit_desc")
@@ -201,10 +305,8 @@ def render() -> None:
                     st.rerun()
 
         if st.button("Save criteria", type="primary", disabled=not ok, key="save_crit"):
-            rubrics = {int(r["id"]): {a: st.session_state.get(f"rub_{int(r['id'])}_{a}", "")
-                                      for a in (2, 5, 8)} for _, r in edited.iterrows()}
             try:
-                db.save_criteria(conn, frame_to_criteria(edited, stored, rubrics))
+                db.save_criteria(conn, candidate)
             except db.CriteriaError as exc:
                 st.error(str(exc))
             else:
@@ -225,6 +327,10 @@ def render() -> None:
     if st.button("Continue to suppliers", type="primary", disabled=not saved_ok, key="to_suppliers"):
         state.goto("suppliers")
         st.rerun()
+
+
+def _stored_rubric(stored: Sequence[Criterion], cid: int) -> dict[int, str]:
+    return next(((c.rubric or {}) for c in stored if c.criterion_id == cid), {})
 
 
 def _saved_ok(stored: list[Criterion]) -> bool:

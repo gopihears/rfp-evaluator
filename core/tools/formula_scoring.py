@@ -63,7 +63,7 @@ def check_formula_config(c: Criterion) -> list[str]:
     if c.formula_kind not in FORMULA_KINDS:
         problems.append(f"'{c.name}': choose a formula ({', '.join(FORMULA_KINDS)}).")
         return problems
-    if not fact_label(c).strip():
+    if not str((c.formula_params or {}).get("label") or "").strip():
         problems.append(f"'{c.name}': describe the figure to extract.")
     if c.formula_kind == "threshold_bands":
         bands = (c.formula_params or {}).get("bands")

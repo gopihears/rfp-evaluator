@@ -24,10 +24,16 @@ from core.orchestrator import (
     run_evaluation,
 )
 from core.tools.document_tool import DocumentError, extract
+from core.tools.formula_scoring import formula_criteria
 from core.tools.llm_provider import scrub
 from ui import state, theme
 
 DEMO_DIR = Path(__file__).resolve().parent.parent / "data" / "synthetic_rfps"
+RETRIEVAL_CHOICES = {
+    "Automatic": "auto",
+    "Always send the full document": "full",
+    "Always search for the best passages": "retrieve",
+}
 _STAGE_ICON = {"QUEUED": "⏳", "READING": "📄", "SCORING": "🤖", "VALIDATING": "🔎",
                "DONE": "✅", "FAILED": "⛔"}
 
@@ -118,6 +124,12 @@ def demo_entries() -> list[Entry]:
     return out
 
 
+def long_sample() -> Entry:
+    """The ~90-page proposal: exercises passage search for long documents."""
+    return make_entry("long_apex_80p.pdf", (DEMO_DIR / "long_apex_80p.pdf").read_bytes(),
+                      name="Apex Systems (long version)", submitted=date(2025, 3, 3), rating=4.5)
+
+
 def error_sample() -> Entry:
     return make_entry("corrupt_co.pdf", (DEMO_DIR / "corrupt_co.pdf").read_bytes(),
                       name="Corrupt Co", submitted=date(2025, 3, 2), rating=1.0)
@@ -143,11 +155,13 @@ def _read_widgets(entries: list[Entry]) -> None:
         e.rating = float(ss.get(f"rate_{e.id}", e.rating))
 
 
-def _card(e: Entry, problems: list[str]) -> None:
+def _card(e: Entry, problems: list[str], long_threshold: int) -> None:
     with st.container(border=True, key=f"card_{e.id}"):
         top, rm = st.columns([6, 1])
         info = (theme.pill("Can't read this PDF", "err") if e.error
                 else theme.pill(f"{e.pages} pages · ~{e.tokens:,} tokens", "info"))
+        if not e.error and (e.tokens or 0) > long_threshold:
+            info += " " + theme.pill("Long: passages are searched", "warn")
         top.markdown(f"**{theme.esc(e.filename)}** &nbsp; {info}", unsafe_allow_html=True)
         if rm.button("Remove", key=f"rm_{e.id}"):
             st.session_state["uploads"] = [u for u in st.session_state["uploads"] if u.id != e.id]
@@ -184,6 +198,9 @@ def render() -> None:
         if st.button("Load demo data", key="load_demo", width="stretch"):
             ss["uploads"] = demo_entries()
             st.rerun()
+        if st.button("Add long sample (~90 pages)", key="add_long", width="stretch"):
+            ss["uploads"].append(long_sample())
+            st.rerun()
         if st.button("Add error sample", key="add_error", width="stretch"):
             ss["uploads"].append(error_sample())
             st.rerun()
@@ -193,7 +210,7 @@ def render() -> None:
     problems = entry_problems(entries, date.today(), cfg.max_suppliers)
 
     for e in entries:
-        _card(e, problems[e.id])
+        _card(e, problems[e.id], cfg.full_context_max_tokens)
     for msg in problems["_run"]:
         st.caption(f"⚠️ {msg}")
     if len(entries) == 1:
@@ -212,12 +229,31 @@ def render() -> None:
     if not criteria_ok:
         st.warning("Fix the evaluation criteria first (active weights must total 100%).")
 
-    with st.expander("Advanced"):
+    active = db.load_active_criteria(conn)
+    has_knockout = any(c.is_mandatory for c in active)
+    formula_count = len(formula_criteria(active))
+    long_docs = sum(1 for e in entries if (e.tokens or 0) > cfg.full_context_max_tokens)
+    with st.expander("Advanced", expanded=bool(long_docs)):
         sens = st.toggle("Weight sensitivity analysis", value=True, key="opt_sens",
                          help="Shows how stable the ranking is if weights change.")
+        knockouts = st.toggle("Apply knock-out rules", value=has_knockout, disabled=not has_knockout,
+                              key="opt_ko", help="Disqualify suppliers below a mandatory minimum.")
+        if not has_knockout:
+            st.caption("No criterion is marked as a knock-out. Set one on the Criteria step.")
+        mode_label = st.radio(
+            "Long proposals", list(RETRIEVAL_CHOICES), key="opt_retrieval",
+            help=f"Automatic switches to passage search above ~{cfg.full_context_max_tokens:,} tokens.")
+        if long_docs:
+            st.caption(f"{long_docs} long document(s) detected: with Automatic, the model sees the "
+                       "best-matching passages for each criterion instead of the whole text.")
+        if formula_count:
+            st.caption(f"{formula_count} criterion(s) are calculated from figures; this adds one "
+                       "extra model call per supplier.")
     b1, b2 = st.columns([1, 1])
     if b1.button("Evaluate suppliers", type="primary", disabled=blocked, key="evaluate"):
-        _run(entries, RunOptions(model=ss["model"], sensitivity=sens), conn, cfg)
+        _run(entries, RunOptions(model=ss["model"], sensitivity=sens,
+                                 enable_knockouts=knockouts and has_knockout,
+                                 retrieval=RETRIEVAL_CHOICES[mode_label]), conn, cfg)
     if b2.button("Back to criteria", key="back_criteria"):
         state.goto("criteria")
         st.rerun()

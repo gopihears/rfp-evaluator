@@ -9,6 +9,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-ra"
 markers = [
+    "browser: real-browser Playwright tests (skip with -m \"not browser\")",
     "eval: LLM evaluation suite (replay by default)",
     "live: calls the real OpenAI API; manual only",
 ]

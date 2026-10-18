@@ -60,7 +60,35 @@ def _evidence(document: str, keyword: str) -> str:
     return ""
 
 
+_FACT_LINE = re.compile(r"- criterion_id (\d+): (.+?)(?: \(expected unit: (.+?)\))?$", re.MULTILINE)
+_TOTAL_ROW = re.compile(r"^total\s*\|\s*([\d,]+(?:\.\d+)?)\s*$", re.IGNORECASE | re.MULTILINE)
+_WEEKS = re.compile(r"(\d+)[- ]weeks?\b", re.IGNORECASE)
+
+
+def _facts(user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Offline fact extraction for formula criteria: total price rows and week counts."""
+    document = _document(user)
+    out = []
+    for cid, label, unit in _FACT_LINE.findall(user):
+        lowered, value, evidence = label.lower(), None, ""
+        if any(w in lowered for w in ("price", "cost", "fee")):
+            m = _TOTAL_ROW.search(document)
+            if m:
+                value, evidence = float(m.group(1).replace(",", "")), m.group(0).strip()
+        elif any(w in lowered for w in ("week", "time", "duration", "deliver", "schedule")):
+            m2 = _WEEKS.search(document)
+            if m2:
+                value = float(m2.group(1))
+                line = next((ln for ln in document.splitlines() if m2.group(0) in ln), "")
+                evidence = line.strip()[:300]
+        out.append({"criterion_id": int(cid), "found": value is not None, "value": value,
+                    "unit": unit, "evidence": evidence})
+    return {"facts": out}
+
+
 def demo_responder(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    if "facts" in schema.get("properties", {}):
+        return _facts(user, schema)
     document = _document(user)
     lowered = document.lower()
     wanted = {int(i): (n, int(m)) for i, n, m in _CRITERION_LINE.findall(user)}

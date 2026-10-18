@@ -54,7 +54,10 @@ SEED_CRITERIA: list[Criterion] = [
         rubric={
             2: "No certifications or controls described.",
             5: "Some controls or certifications; privacy or audit detail missing.",
-            8: "Named certifications, controls, privacy handling and audit rights.",
+            8: (
+                "Named certifications (such as SOC 2 or ISO 27001), controls, "
+                "privacy handling and audit rights."
+            ),
         },
     ),
     Criterion(

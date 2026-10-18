@@ -30,11 +30,30 @@ from core.models import (
     Scorecard,
     SupplierInput,
 )
-from core.tools.document_tool import DocumentError, extract
-from core.tools.evaluation_agent import evaluate_supplier, llm_criteria, prompt_hash
+from core.tools.document_tool import DocumentError, ExtractedDoc, extract
+from core.tools.evaluation_agent import (
+    evaluate_supplier,
+    evaluate_supplier_retrieval,
+    extract_facts,
+    llm_criteria,
+    prompt_hash,
+)
+from core.tools.formula_scoring import formula_criteria, score_formulas
 from core.tools.llm_provider import LLMProvider, ProviderError
 from core.tools.ranking_tool import Overrides, RankOptions, rank
+from core.tools.retrieval import EmbedFn, Index, chunk_document
 from core.tools.sensitivity import sensitivity
+
+RETRIEVAL_MODES = ("auto", "full", "retrieve")
+
+
+def choose_mode(setting: str, est_tokens: int, threshold: int) -> str:
+    """'full' (whole document in one prompt) or 'retrieval' (best passages per criterion)."""
+    if setting == "full":
+        return "full"
+    if setting == "retrieve":
+        return "retrieval"
+    return "retrieval" if est_tokens > threshold else "full"
 
 # Stages of one supplier, in order, with the share of that supplier's work completed.
 STAGE_PROGRESS = {"QUEUED": 0.0, "READING": 0.1, "SCORING": 0.3, "VALIDATING": 0.9,
@@ -63,10 +82,12 @@ class RunOptions:
     overrides: Overrides = field(default_factory=dict)
     sensitivity: bool = True
     sensitivity_draws: int = 500
+    retrieval: str = "auto"  # auto | full | retrieve
 
     def as_json(self) -> dict[str, Any]:
         return {"temperature": self.temperature, "enable_knockouts": self.enable_knockouts,
-                "overrides": len(self.overrides), "sensitivity": self.sensitivity}
+                "overrides": len(self.overrides), "sensitivity": self.sensitivity,
+                "sensitivity_draws": self.sensitivity_draws, "retrieval": self.retrieval}
 
 
 @dataclass(frozen=True)
@@ -127,6 +148,58 @@ class _Worker:
     def _emit(self, upload: SupplierUpload, stage: str, message: str) -> None:
         self.events.put((upload.supplier.supplier_id, stage, message))
 
+    def _embedder(self, card_warnings: list[RunWarning], supplier_id: str) -> EmbedFn | None:
+        embed = getattr(self.provider, "embed", None)
+        if embed is None:
+            return None
+
+        def run(texts: list[str]) -> list[list[float]]:
+            return embed(texts)  # type: ignore[no-any-return]
+
+        try:
+            run(["probe"])
+        except ProviderError:
+            card_warnings.append(RunWarning.make(
+                "I_NO_EMBEDDINGS",
+                "Embeddings were unavailable; retrieval used keyword search only.",
+                supplier_id=supplier_id))
+            return None
+        return run
+
+    def _score(self, upload: SupplierUpload, doc: ExtractedDoc) -> Scorecard:
+        """LLM-judged criteria (full text or retrieval), then formula facts. No arithmetic here."""
+        sup = upload.supplier
+        judged = llm_criteria(self.criteria)
+        formula = formula_criteria(self.criteria)
+        mode = choose_mode(self.options.retrieval, doc.est_tokens,
+                           self.settings.full_context_max_tokens)
+        extra_warnings: list[RunWarning] = []
+        if not judged:
+            card = Scorecard(supplier_id=sup.supplier_id, supplier_name=sup.supplier_name,
+                             criteria=[])
+        elif mode == "retrieval":
+            self._emit(upload, "SCORING",
+                       f"Long document ({doc.pages} pages): searching for the best passages")
+            index = Index.build(chunk_document(doc),
+                                self._embedder(extra_warnings, sup.supplier_id))
+            card = evaluate_supplier_retrieval(
+                self.provider, model=self.options.model, criteria=judged, supplier=sup, doc=doc,
+                index=index, top_k=self.settings.retrieval_top_k,
+                temperature=self.options.temperature).scorecard
+        else:
+            self._emit(upload, "SCORING", f"Scoring {doc.pages} pages with the model")
+            card = evaluate_supplier(
+                self.provider, model=self.options.model, criteria=judged, supplier=sup,
+                document=doc.text, temperature=self.options.temperature).scorecard
+        card.warnings.extend(extra_warnings)
+        if formula and card.ok:
+            self._emit(upload, "SCORING", "Reading price and schedule figures")
+            facts, fact_warnings = extract_facts(
+                self.provider, model=self.options.model, criteria=formula, supplier=sup,
+                document=doc.text, temperature=self.options.temperature)
+            card.facts, card.warnings = facts, card.warnings + fact_warnings
+        return card
+
     def __call__(self, upload: SupplierUpload) -> Scorecard:
         sup = upload.supplier
         if self.cancel.is_set():
@@ -137,12 +210,8 @@ class _Worker:
                           max_bytes=self.settings.max_bytes)
             if self.cancel.is_set():
                 return failed_scorecard(sup, self.criteria, "E_CANCELLED", "The run was cancelled.")
-            self._emit(upload, "SCORING", f"Scoring {doc.pages} pages with the model")
-            result = evaluate_supplier(
-                self.provider, model=self.options.model, criteria=self.criteria, supplier=sup,
-                document=doc.text, temperature=self.options.temperature)
+            card = self._score(upload, doc)
             self._emit(upload, "VALIDATING", "Validating the scorecard")
-            card = result.scorecard
             for w in doc.warnings:
                 card.warnings.append(w.model_copy(update={"supplier_id": sup.supplier_id}))
             return card
@@ -181,7 +250,7 @@ def run_evaluation(
     # FR-3: always evaluate against the LATEST active criteria from the database.
     all_active = db.load_active_criteria(conn)
     db.check_criteria(all_active)
-    criteria = llm_criteria(all_active)
+    criteria = list(all_active)  # LLM-judged and formula criteria, both scored below
     suppliers = [u.supplier for u in uploads]
 
     run_id = db.new_run_id()
@@ -233,10 +302,19 @@ def run_evaluation(
                                                      "The run was cancelled.") for s in suppliers}
 
         yield ProgressEvent("RANKING", "Calculating scores and ranking", 0.93)
+        formula_warnings: list[RunWarning] = []
+        if not cancelled and formula_criteria(criteria):
+            # Formula criteria compare suppliers with each other, so they are scored together here.
+            scored, formula_warnings = score_formulas(
+                criteria, {sid: c.facts for sid, c in cards.items() if c.ok})
+            for sid, extra in scored.items():
+                cards[sid].criteria = sorted(cards[sid].criteria + extra,
+                                             key=lambda r: r.criterion_id)
         ordered_cards = [cards[s.supplier_id] for s in suppliers]
         rank_opts = RankOptions(enable_knockouts=options.enable_knockouts,
                                 overrides=options.overrides)
         ranked = rank(ordered_cards, suppliers, criteria, rank_opts)
+        ranked.warnings.extend(formula_warnings)
         if cancelled:
             ranked.warnings.append(RunWarning.make("E_CANCELLED", "The run was cancelled."))
 
@@ -251,7 +329,7 @@ def run_evaluation(
         export = build_export(
             run_id=run_id, created_at=_created_at(conn, run_id), status=status,
             model=options.model, prompt_hash=prompt_hash(criteria), criteria=criteria,
-            scorecards=ordered_cards, ranked=ranked, sensitivity=sens)
+            scorecards=ordered_cards, ranked=ranked, sensitivity=sens, options=options.as_json())
         db.persist_results(conn, run_id=run_id, status=status, criteria=criteria,
                            scorecards=ordered_cards, ranked=ranked, export=export)
     except BaseException:

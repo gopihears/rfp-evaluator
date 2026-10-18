@@ -31,6 +31,8 @@ def build_export(
     scorecards: Sequence[Scorecard],
     ranked: RankedRun,
     sensitivity: dict[str, Any] | None = None,
+    overrides: Sequence[dict[str, Any]] | None = None,
+    options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cards = {sc.supplier_id: sc for sc in scorecards}
     leaderboard = [
@@ -56,6 +58,9 @@ def build_export(
                 "criteria": [r.model_dump(mode="json") for r in card.criteria],
                 "risks": card.risks,
                 "overall_summary": card.overall_summary,
+                "ok": card.ok,
+                "evaluation_mode": card.evaluation_mode,
+                "facts": [f.model_dump(mode="json") for f in card.facts],
             },
             "computed": s.model_dump(mode="json"),
         })
@@ -74,6 +79,8 @@ def build_export(
         "tie_break_explanations": [t.model_dump(mode="json") for t in ranked.tie_breaks],
         "warnings": warnings,
         "sensitivity": sensitivity,
+        "overrides": list(overrides or []),
+        "options": options or {},
     }
 
 

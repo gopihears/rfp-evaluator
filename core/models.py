@@ -85,6 +85,20 @@ class CriterionResult(BaseModel):
     evidence_verified: bool | None = None
     addressed: bool | None = None
     confidence: Literal["low", "medium", "high"] | None = None
+    source: Literal["llm", "formula"] = "llm"
+    retrieved_pages: list[int] | None = None  # pages shown to the model in retrieval mode
+
+
+class ExtractedFact(BaseModel):
+    """A number the model pulled from a proposal for a formula criterion (it never scores)."""
+
+    criterion_id: int
+    label: str
+    value: float | None
+    unit: str = ""
+    evidence: str = ""
+    evidence_verified: bool | None = None
+    status: Literal["ok", "missing", "invalid", "currency_mismatch"] = "ok"
 
 
 class Scorecard(BaseModel):
@@ -95,6 +109,8 @@ class Scorecard(BaseModel):
     overall_summary: str = ""
     warnings: list[RunWarning] = Field(default_factory=list)
     ok: bool = True
+    facts: list[ExtractedFact] = Field(default_factory=list)
+    evaluation_mode: Literal["full", "retrieval"] = "full"
 
 
 class CriterionComputed(BaseModel):

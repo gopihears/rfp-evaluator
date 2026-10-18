@@ -72,6 +72,16 @@ class LLMProvider(Protocol):
         """Return the model's JSON text for the given schema."""
         ...
 
+    def embed(
+        self, texts: list[str], *, model: str = "text-embedding-3-small"
+    ) -> list[list[float]]:
+        """Return one embedding vector per text (used only for long-document retrieval)."""
+        ...
+
+
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBED_BATCH = 96
+
 
 class OpenAIProvider:
     def __init__(
@@ -134,6 +144,18 @@ class OpenAIProvider:
         page = self._call(lambda: self._client.models.list())
         ids = sorted({m.id for m in page})
         return ids
+
+    def embed(self, texts: list[str], *, model: str = EMBEDDING_MODEL) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), EMBED_BATCH):
+            batch = texts[start : start + EMBED_BATCH]
+
+            def request(items: list[str] = batch) -> Any:
+                return self._client.embeddings.create(model=model, input=items)
+
+            response = self._call(request)
+            vectors.extend([list(item.embedding) for item in response.data])
+        return vectors
 
     def complete_json(
         self,

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.models import Criterion, RankedRun, Scorecard
+from core.tools.formula_scoring import check_formula_config, formula_criteria
 
 _SCHEMA = Path(__file__).with_name("schema.sql")
 _ASSUMED_TOTAL = Decimal(100)
@@ -61,6 +62,14 @@ def check_criteria(criteria: Sequence[Criterion]) -> None:
     if total != _ASSUMED_TOTAL:
         raise CriteriaError(
             "E_WEIGHTS_TOTAL", f"Active weights must total 100% (currently {total}%)."
+        )
+    problems = [p for c in formula_criteria(active) for p in check_formula_config(c)]
+    if problems:
+        raise CriteriaError("E_FORMULA_CONFIG", " ".join(problems))
+    mandatory = [c for c in active if c.is_mandatory and c.min_score is None]
+    if mandatory:
+        raise CriteriaError(
+            "E_KNOCKOUT_CONFIG", f"'{mandatory[0].name}' is mandatory but has no minimum score."
         )
 
 
@@ -172,6 +181,74 @@ def fail_run(conn: sqlite3.Connection, run_id: str) -> None:
         conn.execute("UPDATE rfp_runs SET status = 'FAILED' WHERE rfp_run_id = ?", (run_id,))
 
 
+def _write_children(
+    conn: sqlite3.Connection,
+    run_id: str,
+    status: str,
+    scorecards: Sequence[Scorecard],
+    ranked: RankedRun,
+    export: dict[str, Any],
+) -> None:
+    """Insert supplier/criterion/warning rows and finalise the run.
+
+    The caller owns the transaction (use `with conn:`), so this is atomic with its caller.
+    """
+    cards = {sc.supplier_id: sc for sc in scorecards}
+    export_suppliers = {s["supplier_id"]: s for s in export["suppliers"]}
+    for s in ranked.suppliers:
+        result = export_suppliers[s.supplier_id]
+        conn.execute(
+            "INSERT INTO supplier_results (rfp_run_id, supplier_id, supplier_name,"
+            " submission_date, experience_rating, status, absolute_score, ppi, final_rank,"
+            " result_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                s.supplier_id,
+                s.supplier_name,
+                s.submission_date.isoformat(),
+                s.experience_rating,
+                s.status,
+                s.absolute_score,
+                s.ppi,
+                s.rank,
+                json.dumps(result, sort_keys=True, ensure_ascii=False),
+            ),
+        )
+        card = cards.get(s.supplier_id)
+        by_cid = {r.criterion_id: r for r in card.criteria} if card else {}
+        for cc in s.criteria:
+            res = by_cid.get(cc.criterion_id)
+            verified = res.evidence_verified if res else None
+            conn.execute(
+                "INSERT INTO criterion_scores (rfp_run_id, supplier_id, criterion_id, score,"
+                " benchmark, gap, relative_pct, weighted_contribution, status,"
+                " evidence_verified) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    s.supplier_id,
+                    cc.criterion_id,
+                    cc.score,
+                    cc.benchmark,
+                    cc.gap,
+                    cc.relative_pct,
+                    cc.weighted_contribution,
+                    res.status if res else None,
+                    None if verified is None else int(verified),
+                ),
+            )
+    all_warnings = [w for sc in scorecards for w in sc.warnings] + list(ranked.warnings)
+    for w in all_warnings:
+        conn.execute(
+            "INSERT INTO run_warnings (rfp_run_id, supplier_id, criterion_id, code, severity,"
+            " message) VALUES (?,?,?,?,?,?)",
+            (run_id, w.supplier_id, w.criterion_id, w.code, w.severity, w.message),
+        )
+    conn.execute(
+        "UPDATE rfp_runs SET status = ?, export_json = ? WHERE rfp_run_id = ?",
+        (status, json.dumps(export, sort_keys=True, ensure_ascii=False), run_id),
+    )
+
+
 def persist_results(
     conn: sqlite3.Connection,
     *,
@@ -183,7 +260,6 @@ def persist_results(
     export: dict[str, Any],
 ) -> None:
     """Write every child row and finalise the run in ONE transaction (all or nothing)."""
-    cards = {sc.supplier_id: sc for sc in scorecards}
     with conn:
         for c in criteria:
             p = _criterion_params(c)
@@ -206,59 +282,43 @@ def persist_results(
                     p["formula_params_json"],
                 ),
             )
-        export_suppliers = {s["supplier_id"]: s for s in export["suppliers"]}
-        for s in ranked.suppliers:
-            result = export_suppliers[s.supplier_id]
+        _write_children(conn, run_id, status, scorecards, ranked, export)
+
+
+def replace_results(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    status: str,
+    scorecards: Sequence[Scorecard],
+    ranked: RankedRun,
+    export: dict[str, Any],
+    new_overrides: Sequence[dict[str, Any]],
+) -> None:
+    """Rewrite a finished run's results after an analyst override, atomically.
+
+    The criteria snapshot and the model's original scorecards are kept; overrides are appended
+    to the audit table and nothing is ever deleted from it.
+    """
+    with conn:
+        conn.execute("DELETE FROM supplier_results WHERE rfp_run_id = ?", (run_id,))
+        conn.execute("DELETE FROM run_warnings WHERE rfp_run_id = ?", (run_id,))
+        _write_children(conn, run_id, status, scorecards, ranked, export)
+        for o in new_overrides:
             conn.execute(
-                "INSERT INTO supplier_results (rfp_run_id, supplier_id, supplier_name,"
-                " submission_date, experience_rating, status, absolute_score, ppi, final_rank,"
-                " result_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (
-                    run_id,
-                    s.supplier_id,
-                    s.supplier_name,
-                    s.submission_date.isoformat(),
-                    s.experience_rating,
-                    s.status,
-                    s.absolute_score,
-                    s.ppi,
-                    s.rank,
-                    json.dumps(result, sort_keys=True, ensure_ascii=False),
-                ),
+                "INSERT INTO score_overrides (rfp_run_id, supplier_id, criterion_id,"
+                " original_score, new_score, reason, created_at) VALUES (?,?,?,?,?,?,?)",
+                (run_id, o["supplier_id"], o["criterion_id"], o["original_score"],
+                 o["new_score"], o["reason"], o["created_at"]),
             )
-            card = cards.get(s.supplier_id)
-            by_cid = {r.criterion_id: r for r in card.criteria} if card else {}
-            for cc in s.criteria:
-                res = by_cid.get(cc.criterion_id)
-                verified = res.evidence_verified if res else None
-                conn.execute(
-                    "INSERT INTO criterion_scores (rfp_run_id, supplier_id, criterion_id, score,"
-                    " benchmark, gap, relative_pct, weighted_contribution, status,"
-                    " evidence_verified) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        run_id,
-                        s.supplier_id,
-                        cc.criterion_id,
-                        cc.score,
-                        cc.benchmark,
-                        cc.gap,
-                        cc.relative_pct,
-                        cc.weighted_contribution,
-                        res.status if res else None,
-                        None if verified is None else int(verified),
-                    ),
-                )
-        all_warnings = [w for sc in scorecards for w in sc.warnings] + list(ranked.warnings)
-        for w in all_warnings:
-            conn.execute(
-                "INSERT INTO run_warnings (rfp_run_id, supplier_id, criterion_id, code, severity,"
-                " message) VALUES (?,?,?,?,?,?)",
-                (run_id, w.supplier_id, w.criterion_id, w.code, w.severity, w.message),
-            )
-        conn.execute(
-            "UPDATE rfp_runs SET status = ?, export_json = ? WHERE rfp_run_id = ?",
-            (status, json.dumps(export, sort_keys=True, ensure_ascii=False), run_id),
-        )
+
+
+def list_overrides(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    """The audit trail for a run, oldest first."""
+    rows = conn.execute(
+        "SELECT supplier_id, criterion_id, original_score, new_score, reason, created_at"
+        " FROM score_overrides WHERE rfp_run_id = ? ORDER BY id", (run_id,))
+    return [dict(r) for r in rows]
 
 
 def list_runs(conn: sqlite3.Connection) -> list[dict[str, Any]]:

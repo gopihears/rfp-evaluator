@@ -12,9 +12,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from core.models import Criterion, RunWarning, Scorecard, SupplierInput
+from core.models import Criterion, ExtractedFact, RunWarning, Scorecard, SupplierInput
+from core.tools.document_tool import ExtractedDoc
+from core.tools.formula_scoring import (
+    FACT_SYSTEM_PROMPT,
+    build_fact_prompt,
+    build_fact_schema,
+    parse_facts,
+)
 from core.tools.llm_provider import LLMProvider
-from core.tools.validation_tool import validate
+from core.tools.retrieval import DEFAULT_TOP_K, Index, retrieve_for_criterion
+from core.tools.validation_tool import SourceIndex, validate
 
 SYSTEM_PROMPT = """You are a procurement evaluator. Evaluate ONE supplier proposal against the \
 criteria listed by the user.
@@ -162,3 +170,111 @@ def evaluate_supplier(
         "E_LLM_JSON", "The model did not return valid JSON after a repair attempt.",
         supplier_id=supplier.supplier_id))
     return AgentResult(card2, raw2, attempts=2, repaired=True)
+
+
+# ------------------------------------------------------------ formula fact extraction (OPT-3)
+
+
+def extract_facts(
+    provider: LLMProvider,
+    *,
+    model: str,
+    criteria: Sequence[Criterion],
+    supplier: SupplierInput,
+    document: str,
+    temperature: float | None = 0.0,
+) -> tuple[list[ExtractedFact], list[RunWarning]]:
+    """Ask the model for the figures behind formula criteria. It extracts; Python scores."""
+    schema = build_fact_schema(criteria)
+    user = build_fact_prompt(criteria, document)
+    raw = provider.complete_json(system=FACT_SYSTEM_PROMPT, user=user, json_schema=schema,
+                                 model=model, temperature=temperature)
+    facts, warnings, ok = parse_facts(raw, criteria, document, supplier.supplier_id)
+    if ok:
+        return facts, warnings
+    raw2 = provider.complete_json(
+        system=FACT_SYSTEM_PROMPT,
+        user=user + "\n\nYour previous answer was not valid JSON for the schema. JSON only.",
+        json_schema=schema, model=model, temperature=temperature)
+    facts, warnings, ok = parse_facts(raw2, criteria, document, supplier.supplier_id)
+    if not ok:
+        warnings.append(RunWarning.make(
+            "E_LLM_JSON", "The figures could not be read from the model's answer.",
+            supplier_id=supplier.supplier_id))
+    return facts, warnings
+
+
+# ------------------------------------------------------- long-document retrieval mode (OPT-5)
+
+
+def evaluate_supplier_retrieval(
+    provider: LLMProvider,
+    *,
+    model: str,
+    criteria: Sequence[Criterion],
+    supplier: SupplierInput,
+    doc: ExtractedDoc,
+    index: Index,
+    top_k: int = DEFAULT_TOP_K,
+    temperature: float | None = 0.0,
+) -> AgentResult:
+    """Score a long proposal one criterion at a time from the best-matching passages.
+
+    Evidence is still verified against the FULL document text, so a quote the model could only
+    have invented is flagged even though it saw just a few passages.
+    """
+    active = llm_criteria(criteria)
+    source = SourceIndex(doc.text)
+    results = []
+    warnings: list[RunWarning] = []
+    risks: list[str] = []
+    summary = ""
+    attempts, repaired, any_ok = 0, False, False
+    for c in active:
+        ctx = retrieve_for_criterion(index, c, top_k=top_k)
+        schema = build_schema([c])
+        user = build_user_prompt([c], ctx.text)
+        raw = provider.complete_json(system=SYSTEM_PROMPT, user=user, json_schema=schema,
+                                     model=model, temperature=temperature)
+        card = validate(raw, [c], supplier, doc.text, source_index=source)
+        attempts += 1
+        if not card.ok:
+            repair = (f"{user}\n\nYour previous answer was not valid JSON for the required "
+                      "schema. Return ONLY a valid JSON object that matches the schema.")
+            raw = provider.complete_json(system=SYSTEM_PROMPT, user=repair, json_schema=schema,
+                                         model=model, temperature=temperature)
+            card = validate(raw, [c], supplier, doc.text, source_index=source)
+            attempts += 1
+            repaired = True
+            if card.ok:
+                card.warnings.insert(0, RunWarning.make(
+                    "I_REPAIRED", f"The answer for '{c.name}' needed a repair attempt.",
+                    supplier_id=supplier.supplier_id, criterion_id=c.criterion_id))
+            else:
+                card.warnings.append(RunWarning.make(
+                    "E_LLM_JSON", f"No valid answer for '{c.name}' after a repair attempt.",
+                    supplier_id=supplier.supplier_id, criterion_id=c.criterion_id))
+        any_ok = any_ok or card.ok
+        result = card.criteria[0].model_copy(update={"retrieved_pages": ctx.pages})
+        if ctx.weak:
+            result = result.model_copy(update={"confidence": "low"})
+            card.warnings.append(RunWarning.make(
+                "W_LOW_RETRIEVAL",
+                f"No passage matched '{c.name}' well; the score is low-confidence.",
+                supplier_id=supplier.supplier_id, criterion_id=c.criterion_id))
+        results.append(result)
+        warnings.extend(card.warnings)
+        risks.extend(r for r in card.risks if r not in risks)
+        summary = summary or card.overall_summary
+    seen: set[tuple[str, int | None, str]] = set()
+    unique = []
+    for w in warnings:  # injection/other run-wide warnings repeat once per call
+        key = (w.code, w.criterion_id, w.message)
+        if key not in seen:
+            seen.add(key)
+            unique.append(w)
+    merged = Scorecard(
+        supplier_id=supplier.supplier_id, supplier_name=supplier.supplier_name, criteria=results,
+        risks=risks, overall_summary=summary, warnings=unique, ok=any_ok,
+        evaluation_mode="retrieval")
+    return AgentResult(merged, "", attempts=attempts, repaired=repaired)

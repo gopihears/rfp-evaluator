@@ -64,6 +64,7 @@ class FakeProvider:
         self._models = list(models)
         self._valid_key = valid_key
         self.calls: list[Call] = []
+        self.embed_calls: list[int] = []  # number of texts per embed() call
 
     def validate_key(self) -> list[str]:
         from core.tools.llm_provider import ProviderAuthError
@@ -71,6 +72,21 @@ class FakeProvider:
         if not self._valid_key:
             raise ProviderAuthError("The API key was rejected by OpenAI.")
         return list(self._models)
+
+    def embed(self, texts: list[str], *, model: str = "fake-embedding") -> list[list[float]]:
+        """Hashed bag-of-words vectors: deterministic, lexical rather than semantic."""
+        import hashlib
+        import math
+
+        self.embed_calls.append(len(texts))
+        out = []
+        for text in texts:
+            vec = [0.0] * 128
+            for word in re.findall(r"[a-z0-9]+", text.lower()):
+                vec[int(hashlib.md5(word.encode()).hexdigest(), 16) % 128] += 1.0
+            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+            out.append([v / norm for v in vec])
+        return out
 
     def complete_json(
         self,

@@ -197,8 +197,12 @@ def validate(
     criteria: Sequence[Criterion],
     supplier: SupplierInput,
     source_text: str = "",
+    source_index: _SourceIndex | None = None,
 ) -> Scorecard:
-    """Normalise one raw LLM response into a Scorecard for the active criteria."""
+    """Normalise one raw LLM response into a Scorecard for the active criteria.
+
+    Pass a prebuilt `source_index` to reuse it across several calls on the same document.
+    """
     sid = supplier.supplier_id
     active = sorted((c for c in criteria if c.is_active), key=lambda c: c.criterion_id)
     warnings: list[RunWarning] = []
@@ -234,7 +238,7 @@ def validate(
             continue
         by_id[cid] = entry
 
-    index = _SourceIndex(source_text) if source_text.strip() else None
+    index = source_index or (_SourceIndex(source_text) if source_text.strip() else None)
     results: list[CriterionResult] = []
     for c in active:
         entry = by_id.get(c.criterion_id)
@@ -313,3 +317,7 @@ def validate(
         warnings=warnings,
         ok=True,
     )
+
+
+# Public alias so other tools can verify quotes against a document without re-implementing it.
+SourceIndex = _SourceIndex

@@ -97,7 +97,7 @@ Hand-calculated expected values only; no test recomputes with the production for
 | UT-G04 | Retrieved chunks reordered by page | Ascending |
 | UT-G05 | Summary and pricing chunks always included | Pass |
 | UT-G06 | Weak retrieval | `W_LOW_RETRIEVAL`, confidence low, not silent 0 |
-| UT-G07 | Planted needle (SOC 2 on p.71 of 90-page doc) retrieved for Security criterion | Retrieved in top-k |
+| UT-G07 | Planted needle (SOC 2 on p.71 of 80-page doc) retrieved for Security criterion | Retrieved in top-k |
 | UT-F01 | `lowest_is_best`: prices 100/125/200, max 10 | 10 / 8 / 5 |
 | UT-F02 | `highest_is_best` | Proportional |
 | UT-F03 | `threshold_bands` boundaries (inclusive/exclusive) | As configured |
@@ -220,10 +220,10 @@ Replay mode by default (recorded responses); `--live` re-records. Thresholds fai
 | EV-11 | Missing-information handling | Unaddressed criterion scored low (≤ 3), flagged | pass |
 | EV-12 | Rubric anchors on/off | Variance lower with anchors | reported |
 | EV-13 | Cost / latency per run | Tokens, seconds | reported; budget alarm |
-| EV-14 | Realistic 20-page and 90-page documents: retrieval mode vs full-context mode | Per-criterion score delta ≤ 1 on ≥ 90 % of criteria; citation (page) accuracy higher or equal with retrieval | OPT-5 (Should) |
-| EV-15 | Needle facts planted at known pages (start/middle/end) in the 90-page doc | Needle-dependent criterion reflects the fact regardless of position | OPT-5 |
+| EV-14 | Realistic 20-page and 80-page documents: retrieval mode vs full-context mode | Per-criterion score delta ≤ 1 on ≥ 90 % of criteria; citation (page) accuracy higher or equal with retrieval | OPT-5 (Should) |
+| EV-15 | Needle facts planted at known pages (start/middle/end) in the 80-page doc | Needle-dependent criterion reflects the fact regardless of position | OPT-5 |
 | EV-16 | Formula criteria: extracted price/timeline vs ground truth | Exact match on ≥ 95 % of facts | OPT-3 |
-| EV-17 | Cost/latency for 20-page × 5 suppliers vs 90-page × 5 suppliers | Report tokens and seconds; budget alarm | NFR |
+| EV-17 | Cost/latency for 20-page × 5 suppliers vs 80-page × 5 suppliers | Report tokens and seconds; budget alarm | NFR |
 
 ## 10. Security tests
 

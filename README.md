@@ -7,9 +7,11 @@ explainable, deterministic leaderboard.
 > **Principle:** the LLM judges proposal *content*. Python owns all arithmetic, benchmarks,
 > tie-breaks and ranking. Given the same validated scorecards, output is always identical.
 
-**Status:** Milestone 1 complete (core models, SQLite schema + seed, validation tool, ranking tool,
-sensitivity, export; 113 tests, 97% core coverage). Next: synthetic PDFs, document tool, OpenAI provider,
-orchestrator, then the Streamlit UI. See `docs/` for the full design.
+**Status:** Milestones 1-2 complete. Core engine (models, SQLite, validation, ranking, sensitivity,
+export), synthetic RFP PDFs, document tool, OpenAI provider + fake provider, and the evaluation agent
+(189 tests, 98% core coverage). Next: orchestrator, then the Streamlit UI. See `docs/` for the design.
+
+Regenerate the fictional supplier PDFs (deterministic) with `python -m scripts.make_synthetic_pdfs`.
 
 ```powershell
 pytest              # run the test suite

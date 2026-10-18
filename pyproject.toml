@@ -22,6 +22,8 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["E501"]  # long fictional prose strings
+"ui/*" = ["E501"]  # Streamlit layout calls read better on one line
+"app.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

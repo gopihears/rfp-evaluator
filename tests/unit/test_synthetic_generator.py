@@ -48,3 +48,24 @@ def test_price_totals_match_line_items(synthetic_dir: Path) -> None:
                        .read_bytes()).text
         total = sum(amount for _, amount in proposal.price_items)
         assert f"{total:,}" in text
+
+
+def _four_grams(text: str) -> set[tuple[str, ...]]:
+    import re
+
+    words = re.findall(r"[a-z0-9]+", re.sub(r"\[p\.\d+\]", " ", text.lower()))
+    return {tuple(words[i : i + 4]) for i in range(len(words) - 3)}
+
+
+def test_brief_proposals_are_textually_distinct(synthetic_dir: Path) -> None:
+    """Guards against the four suppliers collapsing into near-copies of each other."""
+    import itertools
+
+    from core.tools.document_tool import extract
+
+    names = ["apex_systems", "brightpath_tech", "nexaworks", "orbit_digital"]
+    grams = {n: _four_grams(extract((synthetic_dir / f"{n}.pdf").read_bytes()).text)
+             for n in names}
+    for a, b in itertools.combinations(names, 2):
+        overlap = len(grams[a] & grams[b]) / len(grams[a] | grams[b])
+        assert overlap < 0.10, f"{a} and {b} are too similar ({overlap:.2f})"

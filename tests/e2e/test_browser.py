@@ -33,16 +33,46 @@ def _free_port() -> int:
 
 
 class Server:
-    def __init__(self, mode: str, tmp: Path) -> None:
+    def __init__(self, mode: str, tmp: Path, prepare: Callable[[Any], None] | None = None) -> None:
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}"
-        env = {**os.environ, "RFP_FAKE_LLM": mode, "RFP_DB_PATH": str(tmp / f"{mode}.db"),
-               "PYTHONIOENCODING": "utf-8"}
+        db_path = tmp / f"{mode}.db"
+        if prepare is not None:  # build a database with custom criteria before the app starts
+            from core import db
+            from core.seed import seed_criteria
+
+            conn = db.connect(str(db_path))
+            db.init_db(conn)
+            seed_criteria(conn)
+            prepare(conn)
+            conn.close()
+        env = {
+            **os.environ,
+            "RFP_FAKE_LLM": mode,
+            "RFP_DB_PATH": str(db_path),
+            "PYTHONIOENCODING": "utf-8",
+        }
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", "app.py", "--server.port", str(self.port),
-             "--server.headless", "true", "--browser.gatherUsageStats", "false",
-             "--server.address", "127.0.0.1"],
-            cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                "app.py",
+                "--server.port",
+                str(self.port),
+                "--server.headless",
+                "true",
+                "--browser.gatherUsageStats",
+                "false",
+                "--server.address",
+                "127.0.0.1",
+            ],
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         deadline = time.time() + 60
         while time.time() < deadline:
             try:
@@ -65,6 +95,35 @@ class Server:
 @pytest.fixture(scope="module")
 def demo_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Server]:
     server = Server("1", tmp_path_factory.mktemp("demo"))
+    yield server
+    server.stop()
+
+
+@pytest.fixture(scope="module")
+def knockout_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Server]:
+    """Own database: Security & Compliance is a knock-out with minimum score 5."""
+    from core import db
+
+    def prepare(conn: Any) -> None:
+        crit = [
+            c.model_copy(update={"is_mandatory": True, "min_score": 5})
+            if c.criterion_id == 4
+            else c
+            for c in db.load_criteria(conn)
+        ]
+        db.save_criteria(conn, crit)
+
+    server = Server("1", tmp_path_factory.mktemp("knockout"), prepare)
+    yield server
+    server.stop()
+
+
+@pytest.fixture(scope="module")
+def formula_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Server]:
+    """Own database: adds Total Price and Delivery Time as calculated criteria."""
+    from tests.run_helpers import with_extra_criteria
+
+    server = Server("1", tmp_path_factory.mktemp("formula"), with_extra_criteria)
     yield server
     server.stop()
 
@@ -214,8 +273,10 @@ def test_e2e_run_details_and_download(app: Page, tmp_path: Path) -> None:
     dl.value.save_as(path)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema_version"] == "1.0" and data["status"] == "COMPLETED"
-    assert [r["supplier_name"] for r in data["leaderboard"]][2:] == ["Orbit Digital",
-                                                                      "BrightPath Tech"]
+    assert [r["supplier_name"] for r in data["leaderboard"]][2:] == [
+        "Orbit Digital",
+        "BrightPath Tech",
+    ]
     assert "sk-" not in path.read_text(encoding="utf-8")
     assert data["criteria_snapshot"] and data["tie_break_explanations"]
 
@@ -261,12 +322,126 @@ def test_e2e_no_critical_accessibility_violations(app: Page) -> None:
 
     def critical(page: Page) -> list[str]:
         result = Axe().run(page, options={"runOnly": ["wcag2a", "wcag2aa"]})
-        return [f"{v['id']}: {v['help']}" for v in result.response["violations"]
-                if v["impact"] == "critical"]
+        return [
+            f"{v['id']}: {v['help']}"
+            for v in result.response["violations"]
+            if v["impact"] == "critical"
+        ]
 
     assert critical(app) == []
     run_demo_evaluation(app)
     assert critical(app) == []
 
 
-_ = Callable  # imported for typing helpers in future tests
+# ============================================================== Should-tier features
+
+
+def open_scorecard(page: Page, rank_index: int = 0) -> Any:
+    page.locator("[class*='st-key-open_']").nth(rank_index).get_by_role("button").click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_text("Evidence and reasoning")).to_be_visible()
+    return dialog
+
+
+def test_e2e_override_changes_score_ranking_and_audit_trail(app: Page) -> None:
+    run_demo_evaluation(app)
+    before = leaderboard_names(app)
+    last = len(before) - 1
+    dialog = open_scorecard(app, last)  # the lowest-ranked supplier
+    dialog.get_by_text("Technical Capability - ").first.click()
+    form = dialog.locator("[class*='st-key-ovr_score_']").first
+    form.get_by_role("spinbutton").fill("10")
+    dialog.get_by_role("button", name="Apply change").first.click()
+    expect(dialog.get_by_text("Give a short reason").first).to_be_visible()  # reason is required
+    dialog.locator("[class*='st-key-ovr_reason_']").first.get_by_role("textbox").fill(
+        "Verified architecture review on site"
+    )
+    dialog.locator("[class*='st-key-ovr_score_']").first.get_by_role("spinbutton").fill("10")
+    dialog.get_by_role("button", name="Apply change").first.click()
+    expect(app.get_by_text("Score updated.")).to_be_visible()
+    expect(app.get_by_text("edited", exact=True).first).to_be_visible()
+    app.get_by_role("tab", name="Run details").click()
+    expect(app.get_by_text("Analyst overrides (audit trail)")).to_be_visible()
+    expect(app.get_by_text("Verified architecture review on site").first).to_be_attached()
+
+
+def test_e2e_override_is_kept_in_history_and_can_be_reverted(app: Page) -> None:
+    run_demo_evaluation(app)
+    dialog = open_scorecard(app, 1)
+    dialog.get_by_text("Technical Capability - ").first.click()
+    dialog.locator("[class*='st-key-ovr_reason_']").first.get_by_role("textbox").fill(
+        "Initial change"
+    )
+    dialog.locator("[class*='st-key-ovr_score_']").first.get_by_role("spinbutton").fill("1")
+    dialog.get_by_role("button", name="Apply change").first.click()
+    expect(app.get_by_text("Score updated.")).to_be_visible()
+    dialog = open_scorecard(app, 0)
+    dialog.get_by_text("Technical Capability - ").first.click()
+    expect(dialog.get_by_text("Analyst override").first).to_be_visible()
+
+
+def test_e2e_knockout_disqualifies_below_minimum(page: Page, knockout_server: Server) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(knockout_server.url)
+    go_to_suppliers(page)
+    btn(page, "Load demo data").click()
+    expect(page.get_by_text("apex_systems.pdf")).to_be_visible()
+    page.get_by_text("Advanced", exact=True).click()
+    expect(page.get_by_text("Apply knock-out rules")).to_be_visible()
+    btn(page, "Evaluate suppliers").click()
+    expect(page.get_by_role("tab", name="Leaderboard")).to_be_visible()
+    assert len(leaderboard_names(page, expected=2)) == 2
+    expect(page.get_by_text("Disqualified", exact=True)).to_have_count(2)
+    expect(page.get_by_text("minimum 5").first).to_be_visible()
+    page.get_by_role("tab", name="Run details").click()
+    expect(page.get_by_text("knock-out rules: on")).to_be_visible()
+
+
+def test_e2e_long_document_uses_passage_search(app: Page) -> None:
+    go_to_suppliers(app)
+    btn(app, "Load demo data").click()
+    btn(app, "Add long sample (~90 pages)").click()
+    expect(app.get_by_text("long_apex_80p.pdf")).to_be_visible()
+    expect(app.get_by_text("Long: passages are searched")).to_be_visible()
+    btn(app, "Evaluate suppliers").click()
+    expect(app.get_by_role("tab", name="Leaderboard")).to_be_visible()
+    names = leaderboard_names(app, expected=5)
+    assert "Apex Systems (long version)" in names
+    idx = names.index("Apex Systems (long version)")
+    dialog = open_scorecard(app, idx)
+    expect(dialog.get_by_text("Long document: each criterion was scored")).to_be_visible()
+    dialog.get_by_text("Technical Capability - ").first.click()
+    expect(dialog.get_by_text("Passages from pages").first).to_be_visible()
+
+
+def test_e2e_formula_criteria_show_figures_and_calculated_scores(
+    page: Page, formula_server: Server
+) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(formula_server.url)
+    go_to_suppliers(page)
+    btn(page, "Load demo data").click()
+    expect(page.get_by_text("apex_systems.pdf")).to_be_visible()
+    page.get_by_text("Advanced", exact=True).click()
+    expect(page.get_by_text("calculated from figures")).to_be_visible()
+    btn(page, "Evaluate suppliers").click()
+    expect(page.get_by_role("tab", name="Leaderboard")).to_be_visible()
+    names = leaderboard_names(page)
+    dialog = open_scorecard(page, names.index("BrightPath Tech"))
+    expect(dialog.get_by_text("Figures read from the proposal")).to_be_visible()
+    dialog.get_by_text("Total Price - ").first.click()
+    expect(dialog.get_by_text("Calculated from a figure").first).to_be_visible()
+    expect(dialog.get_by_text("lowest submitted is 690,000").first).to_be_visible()
+    page.keyboard.press("Escape")
+    page.get_by_role("tab", name="Run details").click()
+    expect(page.get_by_text("Calculated from a figure").first).to_be_attached()  # grid cell
+
+
+def test_e2e_criteria_screen_formula_setup_is_validated(page: Page, demo_server: Server) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(demo_server.url)
+    start_demo(page)
+    page.get_by_text("Scoring method and knock-out rules (optional)").click()
+    page.locator("[class*='st-key-adv_type_3']").get_by_text("Calculated from a figure").click()
+    expect(page.get_by_text("describe the figure").first).to_be_visible()
+    expect(btn(page, "Save criteria")).to_be_disabled()

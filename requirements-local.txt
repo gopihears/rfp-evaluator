@@ -1,0 +1,4 @@
+# Optional: local embeddings for the long-document passage search (RFP_EMBEDDINGS=local).
+# Large install (pulls in PyTorch). Not for Streamlit Community Cloud.
+-r requirements.txt
+sentence-transformers>=3.0

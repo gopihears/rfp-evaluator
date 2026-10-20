@@ -25,6 +25,12 @@ class RecordingProvider:
         self._inner, self._path = inner, path
         self.records: dict[str, str] = {}
 
+    def __getattr__(self, name: str) -> Any:
+        """Forward optional settings such as chunk_tokens to the wrapped provider."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
     def validate_key(self) -> list[str]:
         return self._inner.validate_key()
 

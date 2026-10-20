@@ -73,3 +73,19 @@ Environment variables (or Cloud **Secrets**, which are exposed as environment va
 | `RFP_MAX_SUPPLIERS` | 10 | Suppliers per run |
 | `RFP_CONCURRENCY` | 3 | Suppliers scored in parallel |
 | `RFP_FAKE_LLM` | unset | `1` = offline demo scorer (never on a real deployment); `keyed` = test hook |
+| `RFP_EMBEDDINGS` | unset (OpenAI) | `local` = compute passage-search embeddings on this machine with sentence-transformers (see below) |
+| `RFP_LOCAL_EMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Which local embedding model to load |
+
+## 4. Optional: local embeddings (nothing sent to OpenAI for passage search)
+
+Only the long-document passage search uses embeddings; scoring still needs a chat model. To keep that search step local:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-local.txt
+$env:RFP_EMBEDDINGS = "local"
+.\scripts\run_local.ps1
+```
+
+`all-MiniLM-L6-v2` reads only about 256 word-pieces per text, so in this mode passages are about 150 tokens and four times as many are
+shown per criterion. The first run downloads the model (about 90 MB). The install pulls in PyTorch, so use it locally, not on Community Cloud.
+The eval harness accepts the same choice: `python -m core.evals --provider openai --model YOUR_MODEL_ID --embeddings local`.

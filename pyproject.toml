@@ -35,3 +35,7 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = "core.tools.document_tool"
 disallow_untyped_calls = false  # PyMuPDF ships without type hints
+
+[[tool.mypy.overrides]]
+module = "sentence_transformers"
+ignore_missing_imports = true  # optional dependency (requirements-local.txt)

@@ -41,7 +41,7 @@ from core.tools.evaluation_agent import (
 from core.tools.formula_scoring import formula_criteria, score_formulas
 from core.tools.llm_provider import LLMProvider, ProviderError
 from core.tools.ranking_tool import Overrides, RankOptions, rank
-from core.tools.retrieval import EmbedFn, Index, chunk_document
+from core.tools.retrieval import DEFAULT_TARGET_TOKENS, EmbedFn, Index, chunk_document
 from core.tools.sensitivity import sensitivity
 
 RETRIEVAL_MODES = ("auto", "full", "retrieve")
@@ -205,8 +205,12 @@ class _Worker:
                 "SCORING",
                 f"Long document ({doc.pages} pages): searching for the best passages",
             )
+            # A provider may need smaller passages (the local MiniLM model reads ~256 tokens).
+            chunk_tokens = int(getattr(self.provider, "chunk_tokens", DEFAULT_TARGET_TOKENS))
+            top_k = self.settings.retrieval_top_k * int(getattr(self.provider, "top_k_factor", 1))
             index = Index.build(
-                chunk_document(doc), self._embedder(extra_warnings, sup.supplier_id)
+                chunk_document(doc, target_tokens=chunk_tokens),
+                self._embedder(extra_warnings, sup.supplier_id),
             )
             card = evaluate_supplier_retrieval(
                 self.provider,
@@ -215,7 +219,7 @@ class _Worker:
                 supplier=sup,
                 doc=doc,
                 index=index,
-                top_k=self.settings.retrieval_top_k,
+                top_k=top_k,
                 temperature=self.options.temperature,
             ).scorecard
         else:

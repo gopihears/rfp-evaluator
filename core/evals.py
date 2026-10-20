@@ -268,11 +268,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--record", type=Path, help="save live answers to this file")
     p.add_argument("--replay", type=Path, help="answer from this recording")
     p.add_argument("--out", type=Path, help="write the JSON report here")
+    p.add_argument(
+        "--embeddings",
+        choices=["openai", "local"],
+        default="openai",
+        help="where passage-search embeddings are computed (local = sentence-transformers)",
+    )
     args = p.parse_args(argv)
 
     from core.tools.demo_responder import demo_responder
     from core.tools.fake_provider import FakeProvider
     from core.tools.llm_provider import OpenAIProvider
+    from core.tools.local_embeddings import WithLocalEmbeddings
     from core.tools.recording import RecordingProvider, ReplayProvider
 
     recorder: RecordingProvider | None = None
@@ -283,11 +290,15 @@ def main(argv: list[str] | None = None) -> int:
         if not args.replay:
             p.error("--replay is required with --provider replay")
         provider = ReplayProvider(args.replay)
+        if args.embeddings == "local":
+            provider = WithLocalEmbeddings(provider)
     else:
         key = os.environ.get("OPENAI_API_KEY", "")
         if not key:
             p.error("set OPENAI_API_KEY in the environment (it is never written anywhere)")
         provider = OpenAIProvider(key)
+        if args.embeddings == "local":
+            provider = WithLocalEmbeddings(provider)
         if args.record:
             recorder = RecordingProvider(provider, args.record)
             provider = recorder

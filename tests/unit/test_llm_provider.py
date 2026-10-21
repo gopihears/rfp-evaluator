@@ -197,3 +197,29 @@ def test_fake_provider_records_calls_and_raises_errors() -> None:
     with pytest.raises(ProviderAuthError):
         FakeProvider(valid_key=False).validate_key()
     assert FakeProvider(models=["a", "b"]).validate_key() == ["a", "b"]
+
+
+def test_no_credit_is_reported_as_quota_not_as_a_rate_limit() -> None:
+    from core.tools.llm_provider import ProviderQuotaError
+
+    err = openai.RateLimitError(
+        "You exceeded your current quota",
+        response=httpx.Response(429, request=REQ),
+        body={"code": "insufficient_quota", "message": "You exceeded your current quota"},
+    )
+    p, client, sleeps = provider([err])
+    with pytest.raises(ProviderQuotaError) as e:
+        call(p)
+    assert e.value.code == "E_LLM_QUOTA" and "Billing" in str(e.value)
+    assert len(client.requests) == 1 and not sleeps  # no pointless retries
+
+
+def test_rate_limit_waits_longer_and_honours_retry_after() -> None:
+    err = openai.RateLimitError(
+        "slow down",
+        response=httpx.Response(429, request=REQ, headers={"retry-after": "30"}),
+        body={"code": "rate_limit_exceeded"},
+    )
+    p, client, sleeps = provider([err, completion("{}")])
+    assert call(p) == "{}"
+    assert sleeps[0] >= 30  # the server's Retry-After wins over the default pause

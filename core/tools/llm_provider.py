@@ -47,6 +47,24 @@ class ProviderRateLimitError(ProviderError):
     code = "E_LLM_RATE"
 
 
+class ProviderQuotaError(ProviderError):
+    code = "E_LLM_QUOTA"
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    """OpenAI uses the same 429 for 'too fast' and 'no credit'; the error code tells them apart."""
+    body = getattr(exc, "body", None)
+    code = getattr(exc, "code", None) or (body.get("code") if isinstance(body, dict) else None)
+    return code == "insufficient_quota"
+
+
+def _retry_after(exc: Exception) -> float | None:
+    try:
+        return float(exc.response.headers["retry-after"])  # type: ignore[attr-defined]
+    except (AttributeError, KeyError, ValueError, TypeError):
+        return None
+
+
 class ProviderTimeoutError(ProviderError):
     code = "E_LLM_TIMEOUT"
 
@@ -111,8 +129,11 @@ class OpenAIProvider:
 
     # ------------------------------------------------------------ internals
 
-    def _backoff(self, attempt: int) -> None:
-        self._sleep(min(1.0 * (2 ** attempt), 20.0) + self._rng.uniform(0, 0.5))
+    def _backoff(self, attempt: int, base: float = 1.0, retry_after: float | None = None) -> None:
+        delay = min(base * (2**attempt), 60.0)
+        if retry_after is not None:  # the server said how long to wait
+            delay = max(delay, min(retry_after, 60.0))
+        self._sleep(delay + self._rng.uniform(0, 0.5))
 
     def _call(self, fn: Callable[[], Any]) -> Any:
         """Run one API call with retry on rate limits, timeouts and 5xx."""
@@ -122,7 +143,18 @@ class OpenAIProvider:
                 return fn()
             except (openai.AuthenticationError, openai.PermissionDeniedError) as exc:
                 raise ProviderAuthError(scrub("The API key was rejected by OpenAI.")) from exc
-            except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
+            except openai.RateLimitError as exc:
+                if _is_quota_error(exc):  # retrying cannot help: there is no credit left
+                    raise ProviderQuotaError(
+                        "OpenAI reports no remaining quota or credit for this key. Add credit "
+                        "or raise the spend limit at platform.openai.com (Billing), then retry."
+                    ) from exc
+                last = exc
+                if attempt < self._max_retries:
+                    # Per-minute limits need a longer pause than a network blip does.
+                    self._backoff(attempt, base=5.0, retry_after=_retry_after(exc))
+                    continue
+            except (openai.APITimeoutError, openai.APIConnectionError,
                     openai.InternalServerError) as exc:
                 last = exc
                 if attempt < self._max_retries:
@@ -133,7 +165,10 @@ class OpenAIProvider:
             except openai.APIError as exc:
                 raise ProviderError(scrub(f"OpenAI error: {exc}")) from exc
         if isinstance(last, openai.RateLimitError):
-            raise ProviderRateLimitError("OpenAI rate limit reached; please retry shortly.")
+            raise ProviderRateLimitError(
+                "OpenAI rate limit reached (too many requests or tokens per minute for this "
+                "account). Retry in a minute, or score fewer suppliers at once (RFP_CONCURRENCY=1)."
+            )
         if isinstance(last, (openai.APITimeoutError, openai.APIConnectionError)):
             raise ProviderTimeoutError("Could not reach OpenAI in time.")
         raise ProviderError(scrub(f"OpenAI service error: {last}"))

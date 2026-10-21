@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core import db
-from core.config import Settings
+from core.config import Settings, load_settings
 from core.export import build_export, run_status
 from core.models import (
     Criterion,
@@ -285,7 +285,7 @@ def run_evaluation(
     now: Callable[[], str] = _utc_now,
 ) -> Iterator[ProgressEvent | RunOutcome]:
     """Run a batch. Yields ProgressEvents, then exactly one RunOutcome as the last item."""
-    cfg = settings or Settings()
+    cfg = settings or load_settings()  # honours RFP_CONCURRENCY etc.
     cancel = cancel or threading.Event()
 
     if not uploads:

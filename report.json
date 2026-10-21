@@ -1,0 +1,22 @@
+{
+  "all_passed": false,
+  "details": {
+    "errors": [
+      "E_LLM_RATE: OpenAI rate limit reached; please retry shortly."
+    ]
+  },
+  "fatal": "No supplier could be scored, so the evaluation was stopped. See details.errors for the reasons reported by the model or the PDF reader.",
+  "metrics": {},
+  "model": "gpt-5-nano",
+  "passes": {},
+  "thresholds": {
+    "band_accuracy_within_1": 0.85,
+    "evidence_grounded": 0.95,
+    "facts_exact": 0.95,
+    "injection_max_increase": 1.0,
+    "json_valid_without_repair": 0.98,
+    "kendall_tau": 0.8,
+    "retrieval_agreement": 0.9,
+    "security_drop_min": 2.0
+  }
+}

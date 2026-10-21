@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -118,7 +119,7 @@ def test_history_reopens_a_past_run(demo_app: AppTest) -> None:
 
 
 def test_at02_invalid_key_stays_locked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("ui.connect.make_provider", lambda key: FakeProvider(valid_key=False))
+    monkeypatch.setattr("ui.connect.make_provider", lambda key, **kw: FakeProvider(valid_key=False))
     at = new_app(tmp_path, monkeypatch, demo=False)
     at.text_input[0].set_value("sk-not-a-real-key-123456")  # form: submit in the same run
     connect_button(at).click().run()
@@ -137,8 +138,10 @@ def test_at03_valid_key_connects_and_never_stores_plaintext(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     secret = "sk-test-VALIDKEYVALIDKEY123456"
-    monkeypatch.setattr("ui.connect.make_provider",
-                        lambda key: FakeProvider(models=["gpt-4o", "gpt-4o-mini", "whisper-1"]))
+    monkeypatch.setattr(
+        "ui.connect.make_provider",
+        lambda key, **kw: FakeProvider(models=["gpt-4o", "gpt-4o-mini", "whisper-1"]),
+    )
     at = new_app(tmp_path, monkeypatch, demo=False)
     at.text_input[0].set_value(secret)  # form: submit in the same run
     connect_button(at).click().run()
@@ -175,8 +178,12 @@ def test_knockout_flow_through_the_criteria_and_suppliers_screens(demo_app: AppT
     export = demo_app.session_state["viewing_export"]
     assert export["options"]["enable_knockouts"] is True
     statuses = {s["supplier_name"]: s["computed"]["status"] for s in export["suppliers"]}
-    assert statuses == {"Apex Systems": "RANKED", "NexaWorks": "RANKED",
-                        "BrightPath Tech": "DISQUALIFIED", "Orbit Digital": "DISQUALIFIED"}
+    assert statuses == {
+        "Apex Systems": "RANKED",
+        "NexaWorks": "RANKED",
+        "BrightPath Tech": "DISQUALIFIED",
+        "Orbit Digital": "DISQUALIFIED",
+    }
     assert any("Disqualified" in m.value for m in demo_app.markdown)
 
 
@@ -209,3 +216,50 @@ def test_long_sample_and_retrieval_options_on_the_suppliers_screen(demo_app: App
     export = demo_app.session_state["viewing_export"]
     modes = {s["supplier_name"]: s["scorecard"]["evaluation_mode"] for s in export["suppliers"]}
     assert modes["Apex Systems (long version)"] == "retrieval" and modes["Apex Systems"] == "full"
+
+
+def test_openrouter_can_be_chosen_on_the_connect_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_make_provider(key: str, **kw: Any) -> FakeProvider:
+        seen["kind"] = kw.get("kind")
+        return FakeProvider(
+            models=[
+                "openai/gpt-4o-mini",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "openai/text-embedding-3-small",
+            ]
+        )
+
+    monkeypatch.setattr("ui.connect.make_provider", fake_make_provider)
+    at = new_app(tmp_path, monkeypatch, demo=False)
+    assert any("sk-or-" in t.placeholder for t in at.text_input)
+    at.radio(key="provider_choice").set_value("OpenRouter").run()
+    assert any("free models often log" in c.value for c in at.caption)  # privacy caution
+    at.text_input[0].set_value("sk-or-v1-TESTKEYTESTKEY123456")
+    connect_button(at).click().run()
+    assert seen["kind"] == "openrouter" and at.session_state["step"] == "criteria"
+    assert "openai/text-embedding-3-small" not in at.session_state["models"]  # embeddings hidden
+    assert "meta-llama/llama-3.3-70b-instruct:free" in at.session_state["models"]
+    assert at.session_state["model"] == "openai/gpt-4o-mini"
+    assert at.session_state["key_hint"].startswith("OpenRouter ")
+    assert "TESTKEYTESTKEY" not in at.session_state["key_hint"]
+
+
+def test_openai_remains_the_default_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_make_provider(key: str, **kw: Any) -> FakeProvider:
+        seen["kind"] = kw.get("kind")
+        return FakeProvider(models=["gpt-4o"])
+
+    monkeypatch.setattr("ui.connect.make_provider", fake_make_provider)
+    at = new_app(tmp_path, monkeypatch, demo=False)
+    assert at.radio(key="provider_choice").value == "OpenAI"
+    at.text_input[0].set_value("sk-test-ABCDEFGHIJKLMNOP")
+    connect_button(at).click().run()
+    assert seen["kind"] == "openai"

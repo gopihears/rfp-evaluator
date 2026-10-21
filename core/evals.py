@@ -290,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--provider", choices=["demo", "openai", "replay"], default="demo")
+    p.add_argument("--provider", choices=["demo", "openai", "openrouter", "replay"], default="demo")
     p.add_argument("--model", default="demo-model")
     p.add_argument("--record", type=Path, help="save live answers to this file")
     p.add_argument("--replay", type=Path, help="answer from this recording")
@@ -305,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from core.tools.demo_responder import demo_responder
     from core.tools.fake_provider import FakeProvider
-    from core.tools.llm_provider import OpenAIProvider
+    from core.tools.llm_provider import OpenAIProvider, OpenRouterProvider
     from core.tools.local_embeddings import WithLocalEmbeddings
     from core.tools.recording import RecordingProvider, ReplayProvider
 
@@ -320,10 +320,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.embeddings == "local":
             provider = WithLocalEmbeddings(provider)
     else:
-        key = os.environ.get("OPENAI_API_KEY", "")
+        env_name = "OPENROUTER_API_KEY" if args.provider == "openrouter" else "OPENAI_API_KEY"
+        key = os.environ.get(env_name, "")
         if not key:
-            p.error("set OPENAI_API_KEY in the environment (it is never written anywhere)")
-        provider = OpenAIProvider(key)
+            p.error(f"set {env_name} in the environment (it is never written anywhere)")
+        provider = OpenRouterProvider(key) if args.provider == "openrouter" else OpenAIProvider(key)
         if args.embeddings == "local":
             provider = WithLocalEmbeddings(provider)
         if args.record:

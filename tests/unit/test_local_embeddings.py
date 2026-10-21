@@ -112,3 +112,20 @@ def test_long_document_run_uses_small_passages_and_more_of_them(synthetic_dir: P
     assert plain.embed_calls[1] < len(chunk_texts)
     pages_local = local.export["suppliers"][0]["scorecard"]["criteria"][0]["retrieved_pages"]
     assert pages_local and default.status == "COMPLETED"
+
+
+def test_provider_factory_chooses_the_routed_provider() -> None:
+    from core.tools.llm_provider import OpenAIProvider, OpenRouterProvider
+    from core.tools.provider_factory import provider_kind
+
+    assert provider_kind(None, {}) == "openai"
+    assert provider_kind("OpenRouter", {}) == "openrouter"
+    assert provider_kind(None, {"RFP_PROVIDER": "openrouter"}) == "openrouter"
+    assert provider_kind("openai", {"RFP_PROVIDER": "openrouter"}) == "openai"  # explicit wins
+    assert isinstance(
+        make_provider("sk-or-v1-ABCDEFGHIJKL", {}, kind="openrouter"), OpenRouterProvider
+    )
+    plain = make_provider("sk-test-ABCDEFGHIJKL", {})
+    assert isinstance(plain, OpenAIProvider) and not isinstance(plain, OpenRouterProvider)
+    demo = make_provider("", {"RFP_FAKE_LLM": "1"}, kind="openrouter")
+    assert isinstance(demo, FakeProvider)  # demo mode never touches a real provider

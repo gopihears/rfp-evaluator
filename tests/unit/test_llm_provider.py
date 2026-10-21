@@ -70,8 +70,9 @@ def provider(script: list[Any], **kw: Any) -> tuple[OpenAIProvider, FakeClient, 
 
 
 def call(p: OpenAIProvider, **kw: Any) -> str:
-    return p.complete_json(system="s", user="u", json_schema={"type": "object"},
-                           model="gpt-test", **kw)
+    return p.complete_json(
+        system="s", user="u", json_schema={"type": "object"}, model="gpt-test", **kw
+    )
 
 
 def test_p01_scrub_masks_keys() -> None:
@@ -95,8 +96,9 @@ def test_empty_key_rejected() -> None:
 
 
 def test_p03_rate_limit_then_success_backs_off() -> None:
-    p, client, sleeps = provider([http_error(openai.RateLimitError, 429, "slow down"),
-                                  completion('{"ok": true}')])
+    p, client, sleeps = provider(
+        [http_error(openai.RateLimitError, 429, "slow down"), completion('{"ok": true}')]
+    )
     assert call(p) == '{"ok": true}'
     assert len(client.requests) == 2 and len(sleeps) == 1 and sleeps[0] >= 1.0
 
@@ -110,8 +112,7 @@ def test_rate_limit_exhausted() -> None:
 
 
 def test_server_error_is_retried() -> None:
-    p, client, _ = provider([http_error(openai.InternalServerError, 500, "oops"),
-                             completion("{}")])
+    p, client, _ = provider([http_error(openai.InternalServerError, 500, "oops"), completion("{}")])
     assert call(p) == "{}" and len(client.requests) == 2
 
 
@@ -123,7 +124,8 @@ def test_timeout_maps_to_timeout_error() -> None:
 
 def test_p04_auth_error_not_retried_and_key_not_leaked() -> None:
     p, client, sleeps = provider(
-        [http_error(openai.AuthenticationError, 401, f"Incorrect API key: {KEY}")])
+        [http_error(openai.AuthenticationError, 401, f"Incorrect API key: {KEY}")]
+    )
     with pytest.raises(ProviderAuthError) as e:
         call(p)
     assert len(client.requests) == 1 and not sleeps
@@ -138,10 +140,14 @@ def test_bad_request_message_is_scrubbed() -> None:
 
 
 def test_temperature_rejected_retries_without_it() -> None:
-    p, client, _ = provider([
-        http_error(openai.BadRequestError, 400,
-                   "Unsupported value: 'temperature' does not support 0.0"),
-        completion('{"a": 1}')])
+    p, client, _ = provider(
+        [
+            http_error(
+                openai.BadRequestError, 400, "Unsupported value: 'temperature' does not support 0.0"
+            ),
+            completion('{"a": 1}'),
+        ]
+    )
     assert call(p, temperature=0.0) == '{"a": 1}'
     assert "temperature" in client.requests[0] and "temperature" not in client.requests[1]
 
@@ -156,8 +162,10 @@ def test_request_shape_uses_strict_json_schema() -> None:
     assert fmt["type"] == "json_schema" and fmt["json_schema"]["strict"] is True
 
 
-@pytest.mark.parametrize("message", [completion(None), completion(""),
-                                     completion("{}", refusal="I cannot help with that")])
+@pytest.mark.parametrize(
+    "message",
+    [completion(None), completion(""), completion("{}", refusal="I cannot help with that")],
+)
 def test_refusal_or_empty_raises(message: Any) -> None:
     p, _, _ = provider([message])
     with pytest.raises(ProviderRefusalError):
@@ -176,12 +184,23 @@ def test_validate_key_bad_key() -> None:
         p.validate_key()
 
 
-@pytest.mark.parametrize(("model", "expected"), [
-    ("gpt-4o", True), ("gpt-4.1-mini", True), ("o3-mini", True), ("chatgpt-4o-latest", True),
-    ("text-embedding-3-small", False), ("whisper-1", False), ("tts-1", False),
-    ("dall-e-3", False), ("gpt-4o-realtime-preview", False), ("gpt-4o-audio-preview", False),
-    ("omni-moderation-latest", False), ("gpt-image-1", False),
-])
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gpt-4o", True),
+        ("gpt-4.1-mini", True),
+        ("o3-mini", True),
+        ("chatgpt-4o-latest", True),
+        ("text-embedding-3-small", False),
+        ("whisper-1", False),
+        ("tts-1", False),
+        ("dall-e-3", False),
+        ("gpt-4o-realtime-preview", False),
+        ("gpt-4o-audio-preview", False),
+        ("omni-moderation-latest", False),
+        ("gpt-image-1", False),
+    ],
+)
 def test_chat_model_filter(model: str, expected: bool) -> None:
     assert is_chat_model(model) is expected
 
@@ -210,7 +229,7 @@ def test_no_credit_is_reported_as_quota_not_as_a_rate_limit() -> None:
     p, client, sleeps = provider([err])
     with pytest.raises(ProviderQuotaError) as e:
         call(p)
-    assert e.value.code == "E_LLM_QUOTA" and "Billing" in str(e.value)
+    assert e.value.code == "E_LLM_QUOTA" and "billing" in str(e.value)
     assert len(client.requests) == 1 and not sleeps  # no pointless retries
 
 
@@ -223,3 +242,89 @@ def test_rate_limit_waits_longer_and_honours_retry_after() -> None:
     p, client, sleeps = provider([err, completion("{}")])
     assert call(p) == "{}"
     assert sleeps[0] >= 30  # the server's Retry-After wins over the default pause
+
+
+# ---------------------------------------------------------------------------- OpenRouter
+
+
+def test_openrouter_uses_its_own_endpoint_and_identifies_the_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.tools.llm_provider import OPENROUTER_BASE_URL, OpenRouterProvider
+
+    captured: dict[str, Any] = {}
+
+    def fake_client(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(openai, "OpenAI", fake_client)
+    provider = OpenRouterProvider("sk-or-v1-ABCDEFGHIJKLMNOP")
+    assert captured["base_url"] == OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
+    assert "X-Title" in captured["default_headers"] and captured["max_retries"] == 0
+    assert "sk-or-v1" not in repr(provider) and repr(provider) == "OpenRouterProvider(<redacted>)"
+    assert scrub("bad key sk-or-v1-ABCDEFGHIJKLMNOP") == "bad key [redacted-key]"
+
+
+def test_openrouter_strict_request_requires_honoured_parameters() -> None:
+    from core.tools.llm_provider import OpenRouterProvider
+
+    client = FakeClient([completion('{"ok": true}')])
+    p = OpenRouterProvider("sk-or-v1-ABCDEFGHIJKLMNOP", client=client, sleep=lambda s: None)
+    assert p.complete_json(system="s", user="u", json_schema={"type": "object"}, model="v/m")
+    req = client.requests[0]
+    assert req["response_format"]["type"] == "json_schema"
+    assert req["extra_body"] == {"provider": {"require_parameters": True}}
+
+
+def test_openrouter_falls_back_to_plain_json_when_schemas_are_unsupported() -> None:
+    from core.tools.llm_provider import OpenRouterProvider
+
+    unsupported = http_error(
+        openai.NotFoundError, 404, "No endpoints found that can handle the requested parameters"
+    )
+    client = FakeClient([unsupported, completion('{"criteria": []}')])
+    p = OpenRouterProvider("sk-or-v1-ABCDEFGHIJKLMNOP", client=client, sleep=lambda s: None)
+    schema = {"type": "object", "properties": {"criteria": {"type": "array"}}}
+    assert p.complete_json(system="rules", user="u", json_schema=schema, model="v/m") == (
+        '{"criteria": []}'
+    )
+    first, second = client.requests
+    assert first["response_format"]["type"] == "json_schema"
+    assert second["response_format"] == {"type": "json_object"}
+    assert "extra_body" not in second  # the fallback must not demand schema support
+    assert '"criteria"' in second["messages"][0]["content"]  # schema moved into the prompt
+
+
+def test_openai_does_not_fall_back_on_unsupported_schema() -> None:
+    p, client, _ = provider([http_error(openai.NotFoundError, 404, "No endpoints found")])
+    with pytest.raises(ProviderError):
+        call(p)
+    assert len(client.requests) == 1  # real OpenAI errors are surfaced, not masked
+
+
+def test_openrouter_unrelated_errors_are_not_retried_as_json_mode() -> None:
+    from core.tools.llm_provider import OpenRouterProvider
+
+    client = FakeClient([http_error(openai.BadRequestError, 400, "context length exceeded")])
+    p = OpenRouterProvider("sk-or-v1-ABCDEFGHIJKLMNOP", client=client, sleep=lambda s: None)
+    with pytest.raises(ProviderError) as e:
+        p.complete_json(system="s", user="u", json_schema={}, model="v/m")
+    assert "OpenRouter rejected the request" in str(e.value) and len(client.requests) == 1
+
+
+def test_openrouter_has_no_embeddings_so_search_falls_back_to_keywords() -> None:
+    from core.tools.llm_provider import OpenRouterProvider
+
+    p = OpenRouterProvider("sk-or-v1-ABCDEFGHIJKLMNOP", client=FakeClient([]))
+    with pytest.raises(ProviderError) as e:
+        p.embed(["x"])
+    assert "keywords" in str(e.value)
+
+
+def test_model_filter_for_routers_keeps_vendor_prefixed_ids() -> None:
+    assert is_chat_model("openai/gpt-4o-mini", routed=True)
+    assert is_chat_model("meta-llama/llama-3.3-70b-instruct:free", routed=True)  # real chat model
+    assert is_chat_model("mistralai/mistral-small", routed=True)
+    assert not is_chat_model("openai/text-embedding-3-small", routed=True)
+    assert not is_chat_model("mistralai/mistral-small", routed=False)  # OpenAI filter unchanged

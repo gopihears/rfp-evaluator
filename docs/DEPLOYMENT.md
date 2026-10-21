@@ -89,3 +89,26 @@ $env:RFP_EMBEDDINGS = "local"
 `all-MiniLM-L6-v2` reads only about 256 word-pieces per text, so in this mode passages are about 150 tokens and four times as many are
 shown per criterion. The first run downloads the model (about 90 MB). The install pulls in PyTorch, so use it locally, not on Community Cloud.
 The eval harness accepts the same choice: `python -m core.evals --provider openai --model YOUR_MODEL_ID --embeddings local`.
+
+## 5. Using OpenRouter instead of OpenAI
+
+OpenRouter (https://openrouter.ai) gives one key for many models and offers some free ones. The Connect screen has a **Provider**
+choice (OpenAI or OpenRouter); the key you type is used for that session only, exactly as with OpenAI.
+
+- Model ids look like `vendor/model` (for example `openai/gpt-4o-mini`). Models ending in `:free` cost nothing but have tight rate limits.
+- Not every routed model supports strict JSON schemas. The app asks for one first and, if the model cannot, falls back to plain JSON mode
+  with the schema in the prompt; the validator and the repair attempt then handle imperfect output. Smaller or free models will fail
+  the eval more often, which is exactly what the eval is for.
+- OpenRouter has no embeddings endpoint here, so passage search for long proposals uses keywords, or `RFP_EMBEDDINGS=local`
+  (section 4) for local semantic search.
+- **Privacy:** OpenRouter forwards your documents to whichever vendor serves the model, and free models often log or train on inputs.
+  Use it for testing with the fictional proposals, not for confidential bids.
+- Run the eval with it:
+
+```powershell
+$env:OPENROUTER_API_KEY = Read-Host "OpenRouter API key"
+.\.venv\Scripts\python.exe -m core.evals --provider openrouter --model openai/gpt-4o-mini --embeddings local --record rec.json --out report.json
+Remove-Item Env:\OPENROUTER_API_KEY
+```
+
+Set `RFP_PROVIDER=openrouter` to make OpenRouter the default choice in the app.

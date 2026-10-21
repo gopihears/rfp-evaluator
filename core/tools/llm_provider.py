@@ -6,6 +6,7 @@ never written anywhere. All error text passes through scrub().
 
 from __future__ import annotations
 
+import json
 import random
 import re
 import time
@@ -15,8 +16,22 @@ from typing import Any, Protocol
 import openai
 
 _KEY_PATTERN = re.compile(r"(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-]{12,})")
-_NON_CHAT = ("embedding", "whisper", "tts", "dall-e", "audio", "realtime", "transcribe",
-             "moderation", "image", "davinci", "babbage", "search", "similarity", "instruct")
+_NON_CHAT = (
+    "embedding",
+    "whisper",
+    "tts",
+    "dall-e",
+    "audio",
+    "realtime",
+    "transcribe",
+    "moderation",
+    "image",
+    "davinci",
+    "babbage",
+    "search",
+    "similarity",
+    "instruct",
+)
 _CHAT_PREFIXES = ("gpt-", "chatgpt", "o1", "o3", "o4", "o5")
 
 
@@ -30,8 +45,20 @@ def mask_key(key: str) -> str:
     return f"sk-…{key[-4:]}" if len(key) >= 8 else "…"
 
 
-def is_chat_model(model_id: str) -> bool:
+_NON_CHAT_ROUTED = ("embedding", "whisper", "tts", "dall-e", "audio", "transcribe",
+                    "moderation", "image", "rerank")
+
+
+def is_chat_model(model_id: str, *, routed: bool = False) -> bool:
+    """Heuristic filter for the model dropdown.
+
+    OpenAI ids start with a known chat prefix (gpt-, o3 ...). A router such as OpenRouter lists
+    ids like 'vendor/model' (and real chat models are often called '...-instruct'), so there only
+    the clearly-not-chat kinds (embeddings, audio, images, moderation) are filtered out.
+    """
     lowered = model_id.lower()
+    if routed:
+        return not any(bad in lowered for bad in _NON_CHAT_ROUTED)
     return lowered.startswith(_CHAT_PREFIXES) and not any(bad in lowered for bad in _NON_CHAT)
 
 
@@ -101,7 +128,25 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 EMBED_BATCH = 96
 
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+_UNSUPPORTED_HINTS = (
+    "response_format",
+    "json_schema",
+    "structured",
+    "require_parameters",
+    "no endpoints",
+    "not support",
+    "unsupported",
+)
+
+
 class OpenAIProvider:
+    """Chat provider for OpenAI and any OpenAI-compatible endpoint (see OpenRouterProvider)."""
+
+    label = "OpenAI"
+    json_fallback = False  # retry in plain JSON mode when strict schemas are not supported
+    require_parameters = False  # router option: only use endpoints that honour every parameter
+
     def __init__(
         self,
         api_key: str,
@@ -111,21 +156,28 @@ class OpenAIProvider:
         timeout: float = 60.0,
         sleep: Callable[[float], None] = time.sleep,
         rng: random.Random | None = None,
+        base_url: str | None = None,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         if not api_key or not api_key.strip():
             raise ProviderAuthError("An API key is required.")
         self._api_key = api_key.strip()
-        self._client = client or openai.OpenAI(api_key=self._api_key, timeout=timeout,
-                                               max_retries=0)
+        self._client = client or openai.OpenAI(
+            api_key=self._api_key,
+            timeout=timeout,
+            max_retries=0,
+            base_url=base_url,
+            default_headers=default_headers,
+        )
         self._max_retries = max_retries
         self._sleep = sleep
         self._rng = rng or random.Random()
 
     def __repr__(self) -> str:
-        return "OpenAIProvider(<redacted>)"
+        return f"{type(self).__name__}(<redacted>)"
 
     def __reduce__(self) -> Any:
-        raise TypeError("OpenAIProvider cannot be pickled (it holds a secret).")
+        raise TypeError(f"{type(self).__name__} cannot be pickled (it holds a secret).")
 
     # ------------------------------------------------------------ internals
 
@@ -142,36 +194,41 @@ class OpenAIProvider:
             try:
                 return fn()
             except (openai.AuthenticationError, openai.PermissionDeniedError) as exc:
-                raise ProviderAuthError(scrub("The API key was rejected by OpenAI.")) from exc
+                raise ProviderAuthError(
+                    scrub(f"The API key was rejected by {self.label}.")
+                ) from exc
             except openai.RateLimitError as exc:
                 if _is_quota_error(exc):  # retrying cannot help: there is no credit left
                     raise ProviderQuotaError(
-                        "OpenAI reports no remaining quota or credit for this key. Add credit "
-                        "or raise the spend limit at platform.openai.com (Billing), then retry."
+                        f"{self.label} reports no remaining quota or credit for this key. "
+                        "Add credit or raise the spend limit in your billing page, then retry."
                     ) from exc
                 last = exc
                 if attempt < self._max_retries:
                     # Per-minute limits need a longer pause than a network blip does.
                     self._backoff(attempt, base=5.0, retry_after=_retry_after(exc))
                     continue
-            except (openai.APITimeoutError, openai.APIConnectionError,
-                    openai.InternalServerError) as exc:
+            except (
+                openai.APITimeoutError,
+                openai.APIConnectionError,
+                openai.InternalServerError,
+            ) as exc:
                 last = exc
                 if attempt < self._max_retries:
                     self._backoff(attempt)
                     continue
             except openai.BadRequestError as exc:
-                raise ProviderError(scrub(f"OpenAI rejected the request: {exc}")) from exc
+                raise ProviderError(scrub(f"{self.label} rejected the request: {exc}")) from exc
             except openai.APIError as exc:
-                raise ProviderError(scrub(f"OpenAI error: {exc}")) from exc
+                raise ProviderError(scrub(f"{self.label} error: {exc}")) from exc
         if isinstance(last, openai.RateLimitError):
             raise ProviderRateLimitError(
-                "OpenAI rate limit reached (too many requests or tokens per minute for this "
+                f"{self.label} rate limit reached (too many requests or tokens per minute for this "
                 "account). Retry in a minute, or score fewer suppliers at once (RFP_CONCURRENCY=1)."
             )
         if isinstance(last, (openai.APITimeoutError, openai.APIConnectionError)):
-            raise ProviderTimeoutError("Could not reach OpenAI in time.")
-        raise ProviderError(scrub(f"OpenAI service error: {last}"))
+            raise ProviderTimeoutError(f"Could not reach {self.label} in time.")
+        raise ProviderError(scrub(f"{self.label} service error: {last}"))
 
     # ------------------------------------------------------------- interface
 
@@ -201,31 +258,81 @@ class OpenAIProvider:
         model: str,
         temperature: float | None = 0.0,
     ) -> str:
-        def request(with_temperature: bool) -> Any:
+        def request(mode: str, with_temperature: bool) -> Any:
+            instructions = system
+            if mode == "schema":
+                response_format: dict[str, Any] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "rfp_scorecard", "strict": True, "schema": json_schema},
+                }
+            else:  # plain JSON mode: the schema travels in the prompt instead
+                response_format = {"type": "json_object"}
+                instructions += (
+                    "\n\nReturn one JSON object that matches this JSON Schema "
+                    "exactly:\n" + json.dumps(json_schema)
+                )
             kwargs: dict[str, Any] = {
                 "model": model,
-                "messages": [{"role": "system", "content": system},
-                             {"role": "user", "content": user}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "rfp_scorecard", "strict": True,
-                                    "schema": json_schema},
-                },
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": user},
+                ],
+                "response_format": response_format,
             }
+            if self.require_parameters and mode == "schema":
+                kwargs["extra_body"] = {"provider": {"require_parameters": True}}
             if with_temperature and temperature is not None:
                 kwargs["temperature"] = temperature
             return self._call(lambda: self._client.chat.completions.create(**kwargs))
 
-        try:
-            response = request(True)
-        except ProviderError as exc:
-            # Some models (e.g. reasoning models) only accept the default temperature.
-            if "temperature" in str(exc).lower():
-                response = request(False)
-            else:
+        def attempt(mode: str) -> Any:
+            try:
+                return request(mode, True)
+            except ProviderError as exc:
+                # Some models (e.g. reasoning models) only accept the default temperature.
+                if "temperature" in str(exc).lower():
+                    return request(mode, False)
                 raise
+
+        try:
+            response = attempt("schema")
+        except ProviderError as exc:
+            hinted = any(h in str(exc).lower() for h in _UNSUPPORTED_HINTS)
+            if not (self.json_fallback and hinted):
+                raise
+            response = attempt("json")
         message = response.choices[0].message
         content = getattr(message, "content", None)
         if getattr(message, "refusal", None) or not content:
             raise ProviderRefusalError("The model declined or returned an empty answer.")
         return str(content)
+
+
+class OpenRouterProvider(OpenAIProvider):
+    """OpenRouter (https://openrouter.ai): one key for many models, OpenAI-compatible API.
+
+    Not every routed model supports strict JSON schemas, so this falls back to plain JSON mode
+    (the validation tool and the repair attempt cope with imperfect output). OpenRouter has no
+    embeddings endpoint here, so passage search uses keyword search or RFP_EMBEDDINGS=local.
+    """
+
+    label = "OpenRouter"
+    json_fallback = True
+    require_parameters = True
+
+    def __init__(self, api_key: str, **kwargs: Any) -> None:
+        kwargs.setdefault("base_url", OPENROUTER_BASE_URL)
+        kwargs.setdefault(
+            "default_headers",
+            {
+                "HTTP-Referer": "https://github.com/gopihears/rfp-evaluator",
+                "X-Title": "RFP Evaluator",
+            },
+        )
+        super().__init__(api_key, **kwargs)
+
+    def embed(self, texts: list[str], *, model: str = EMBEDDING_MODEL) -> list[list[float]]:
+        raise ProviderError(
+            "OpenRouter has no embeddings endpoint here; passage search will use keywords "
+            "(or set RFP_EMBEDDINGS=local)."
+        )

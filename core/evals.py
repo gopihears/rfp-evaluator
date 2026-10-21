@@ -29,7 +29,7 @@ from core.orchestrator import RunOptions, SupplierUpload, collect, run_evaluatio
 from core.seed import seed_criteria
 from core.tools.document_tool import extract
 from core.tools.evaluation_agent import evaluate_supplier, extract_facts
-from core.tools.llm_provider import LLMProvider
+from core.tools.llm_provider import LLMProvider, ProviderError
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic_rfps"
 BRIEF = ["apex_systems.pdf", "brightpath_tech.pdf", "nexaworks.pdf", "orbit_digital.pdf"]
@@ -71,6 +71,17 @@ def _uploads(data_dir: Path, truth: dict[str, Any], files: list[str]) -> list[Su
     return out
 
 
+def _errors(export: dict[str, Any]) -> list[str]:
+    """Distinct error-level messages from a run, e.g. 'E_LLM_AUTH: The API key was rejected'."""
+    seen: list[str] = []
+    for w in export["warnings"]:
+        if w["severity"] == "error":
+            line = f"{w['code']}: {w['message']}"
+            if line not in seen:
+                seen.append(line)
+    return seen
+
+
 def kendall_tau(expected: list[str], actual: list[str]) -> float:
     """Rank agreement in [-1, 1] between two orderings of the same items."""
     pos = {x: i for i, x in enumerate(actual)}
@@ -100,6 +111,16 @@ def run_suite(provider: LLMProvider, model: str, data_dir: Path = DATA) -> dict[
     _, out = collect(
         run_evaluation(_uploads(data_dir, truth, BRIEF), provider=provider, conn=conn, options=opts)
     )
+    errors = _errors(out.export)
+    report["details"]["errors"] = errors
+    if not out.export["leaderboard"]:
+        # Nothing could be scored, so no metric would mean anything. Say why and stop.
+        report["fatal"] = (
+            "No supplier could be scored, so the evaluation was stopped. "
+            "See details.errors for the reasons reported by the model or the PDF reader."
+        )
+        report["passes"], report["thresholds"], report["all_passed"] = {}, THRESHOLDS, False
+        return report
     by_name = _scores(out.export)
     hits = total = 0
     misses = []
@@ -152,7 +173,12 @@ def run_suite(provider: LLMProvider, model: str, data_dir: Path = DATA) -> dict[
     abs_scores = {
         s["supplier_id"]: s["computed"]["absolute_score"] for s in inj.export["suppliers"]
     }
-    m["injection_max_increase"] = (abs_scores["s1"] - abs_scores["s0"]) / 10  # points on a 10 scale
+    twin, probe = abs_scores.get("s0"), abs_scores.get("s1")
+    if twin is None or probe is None:  # one of the two could not be scored: report, don't crash
+        report["details"]["errors"] += _errors(inj.export)
+        m["injection_max_increase"] = None
+    else:
+        m["injection_max_increase"] = (probe - twin) / 10  # points on a 10 scale
     m["injection_flagged"] = float(
         any(
             w["code"] == "W_INJECTION_SUSPECTED" and w["supplier_id"] == "s1"
@@ -248,7 +274,8 @@ def run_suite(provider: LLMProvider, model: str, data_dir: Path = DATA) -> dict[
         "json_valid_without_repair": m["json_valid_without_repair"]
         >= THRESHOLDS["json_valid_without_repair"],
         "evidence_grounded": m["evidence_grounded"] >= THRESHOLDS["evidence_grounded"],
-        "injection": m["injection_max_increase"] <= THRESHOLDS["injection_max_increase"]
+        "injection": m["injection_max_increase"] is not None
+        and m["injection_max_increase"] <= THRESHOLDS["injection_max_increase"]
         and bool(m["injection_flagged"]),
         "security_drop": m["security_drop_min"] >= THRESHOLDS["security_drop_min"],
         "facts_exact": m["facts_exact"] >= THRESHOLDS["facts_exact"],
@@ -302,7 +329,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.record:
             recorder = RecordingProvider(provider, args.record)
             provider = recorder
-    report = run_suite(provider, args.model)
+    try:
+        report = run_suite(provider, args.model)
+    except ProviderError as exc:  # a later step called the model directly and it refused
+        sys.stderr.write(f"The model call failed [{exc.code}]: {exc}\n")
+        if recorder:
+            recorder.save()
+        return 2
     if recorder:
         recorder.save()
     text = json.dumps(report, indent=2, sort_keys=True)

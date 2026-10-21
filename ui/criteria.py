@@ -312,6 +312,7 @@ def render() -> None:
             else:
                 _reset_editor(to_frame(db.load_criteria(conn)))
                 state.notice("Criteria saved. New runs will use them.", "success")
+                state.mark_dirty()
                 st.rerun()
     with right:
         if ok:

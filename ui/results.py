@@ -119,6 +119,7 @@ def _apply_override(export: dict[str, Any], supplier_id: str, criterion_id: int,
         st.error(str(exc))
         return
     st.session_state["viewing_export"] = new_export
+    state.mark_dirty()
     state.notice("Score updated. The ranking was recalculated and the change was logged.", "success")
     st.rerun()
 
@@ -326,6 +327,7 @@ def _details(export: dict[str, Any]) -> None:
             if db.delete_run(state.conn(), export["rfp_run_id"]):
                 for key in ("outcome", "viewing_export", "confirm_delete"):
                     st.session_state.pop(key, None)
+                state.mark_dirty()
                 state.goto("suppliers")
                 state.notice("The run was deleted.", "success")
             else:

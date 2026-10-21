@@ -132,3 +132,24 @@ What this means, so you can decide knowingly:
   the app restarts, sleeps long enough to be recycled, or is redeployed. Download the JSON of anything you must keep.
 - Anyone can remove a run: **Results → Run details → Delete this run**.
 - For history that survives restarts, the app would need an external database such as hosted Postgres; the code is written for SQLite today.
+
+## 7. Saving your history on your own laptop (backup and restore)
+
+A hosted server cannot write to your laptop, and it gets no warning before a restart, so history is kept **on your side** instead. Open the
+sidebar and expand **Backup and restore**:
+
+| Feature | What it does |
+|---|---|
+| **Keep my history in this browser** (on by default on a hosted app) | After every change (a finished run, an override, a deletion, saved criteria) the app stores your runs and criteria in this browser's IndexedDB. When you open the app again, even after the server restarted or was redeployed, they are restored automatically and a "Restored from this browser" message appears. |
+| **Backup file (JSON)** | Downloads everything as a JSON file you can keep anywhere. |
+| **Database file (SQLite)** | Downloads a real `.db` file you can open in any SQLite tool. |
+| **Restore from a file** | Upload either file into any new session to bring the runs back. Runs already present are never overwritten or duplicated. |
+| **Clear history saved in this browser** | Removes the browser's copy. |
+
+Things to know:
+
+- The browser copy belongs to **that browser on that device**. A different browser, a private window, or cleared site data starts empty; restore from a downloaded file instead.
+- The saved history contains the quotes taken from your proposals. On a shared or public computer, switch **Keep my history in this browser** off and use the download buttons.
+- It never contains your API key.
+- Restored data is treated as untrusted input: files are size-limited and structure-checked, every run is rebuilt and re-ranked by the normal code, and a damaged file is refused with a message.
+- It is the same mechanism whether the app is hosted or local; locally the SQLite file on disk already keeps your history, so browser saving is off by default there.

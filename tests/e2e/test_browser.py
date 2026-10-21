@@ -33,7 +33,13 @@ def _free_port() -> int:
 
 
 class Server:
-    def __init__(self, mode: str, tmp: Path, prepare: Callable[[Any], None] | None = None) -> None:
+    def __init__(
+        self,
+        mode: str,
+        tmp: Path,
+        prepare: Callable[[Any], None] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> None:
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         db_path = tmp / f"{mode}.db"
@@ -51,6 +57,7 @@ class Server:
             "RFP_FAKE_LLM": mode,
             "RFP_DB_PATH": str(db_path),
             "PYTHONIOENCODING": "utf-8",
+            **(extra_env or {}),
         }
         self.proc = subprocess.Popen(
             [
@@ -445,3 +452,146 @@ def test_e2e_criteria_screen_formula_setup_is_validated(page: Page, demo_server:
     page.locator("[class*='st-key-adv_type_3']").get_by_text("Calculated from a figure").click()
     expect(page.get_by_text("describe the figure").first).to_be_visible()
     expect(btn(page, "Save criteria")).to_be_disabled()
+
+
+# ============================================== backup, restore and browser-saved history
+
+
+@pytest.fixture(scope="module")
+def session_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Server]:
+    """Hosted-style: private in-memory data per visitor, history kept in the browser."""
+    server = Server("1", tmp_path_factory.mktemp("session"), extra_env={"RFP_DB_MODE": "session"})
+    yield server
+    server.stop()
+
+
+_READ_STORE = """() => new Promise((resolve) => {
+  const r = indexedDB.open('rfp-evaluator', 1);
+  r.onupgradeneeded = () => { r.result.createObjectStore('kv'); };
+  r.onsuccess = () => {
+    const db = r.result;
+    if (!db.objectStoreNames.contains('kv')) { resolve(null); return; }
+    const q = db.transaction('kv').objectStore('kv').get('history');
+    q.onsuccess = () => resolve(q.result === undefined ? null : q.result);
+    q.onerror = () => resolve(null);
+  };
+  r.onerror = () => resolve(null);
+})"""
+
+
+def stored_history(page: Page) -> dict[str, Any] | None:
+    raw = page.evaluate(_READ_STORE)
+    return None if raw is None else json.loads(raw)
+
+
+def wait_for_saved_runs(page: Page, runs: int) -> dict[str, Any]:
+    deadline = time.time() + 40
+    while time.time() < deadline:
+        stored = stored_history(page)
+        if stored is not None and len(stored["runs"]) == runs:
+            return stored
+        page.wait_for_timeout(500)
+    raise AssertionError(f"the browser never saved {runs} run(s)")
+
+
+def open_backup_panel(page: Page) -> None:
+    page.get_by_test_id("stExpandSidebarButton").click()
+    page.get_by_text("Backup and restore").click()
+
+
+def test_e2e_history_is_saved_in_the_browser_and_restored_in_a_new_session(
+    page: Page, session_server: Server
+) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(session_server.url)
+    run_demo_evaluation(page)
+    stored = wait_for_saved_runs(page, 1)
+    assert stored["format"] == "rfp-evaluator-backup" and stored["version"] == 1
+    assert {s["supplier_name"] for s in stored["runs"][0]["suppliers"]} >= {"Apex Systems"}
+    assert "sk-" not in json.dumps(stored)  # an API key is never part of the saved history
+
+    page.reload()  # a brand-new session on a server that never saw this run
+    expect(page.get_by_text("Restored from this browser")).to_be_visible()
+    start_demo(page)
+    page.get_by_test_id("stExpandSidebarButton").click()
+    expect(page.locator("[class*='st-key-hist_']")).to_have_count(1)
+    page.locator("[class*='st-key-hist_']").first.get_by_role("button").click()
+    expect(page.get_by_role("tab", name="Leaderboard")).to_be_visible()
+    assert len(leaderboard_names(page)) == 4
+
+
+def test_e2e_downloaded_backups_contain_the_run(
+    page: Page, session_server: Server, tmp_path: Path
+) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(session_server.url)
+    run_demo_evaluation(page)
+    open_backup_panel(page)
+    with page.expect_download() as json_dl:
+        page.get_by_role("button", name="Backup file (JSON)").click()
+    json_path = tmp_path / "backup.json"
+    json_dl.value.save_as(json_path)
+    bundle = json.loads(json_path.read_text(encoding="utf-8"))
+    assert bundle["format"] == "rfp-evaluator-backup" and len(bundle["runs"]) >= 1
+    assert "sk-" not in json_path.read_text(encoding="utf-8")
+    with page.expect_download() as db_dl:
+        page.get_by_role("button", name="Database file (SQLite)").click()
+    db_path = tmp_path / "backup.db"
+    db_dl.value.save_as(db_path)
+    assert db_path.read_bytes().startswith(b"SQLite format 3")
+
+
+def test_e2e_restore_from_a_backup_file_in_a_clean_browser(
+    page: Page, browser: Any, session_server: Server, tmp_path: Path
+) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(session_server.url)
+    run_demo_evaluation(page)
+    open_backup_panel(page)
+    with page.expect_download() as dl:
+        page.get_by_role("button", name="Backup file (JSON)").click()
+    path = tmp_path / "backup.json"
+    dl.value.save_as(path)
+
+    clean = browser.new_context()  # no saved history, a different "laptop"
+    other = clean.new_page()
+    other.set_default_timeout(LONG)
+    try:
+        other.goto(session_server.url)
+        assert stored_history(other) is None
+        open_backup_panel(other)
+        other.locator("input[type='file']").last.set_input_files(str(path))
+        expect(other.get_by_text("run(s) restored")).to_be_visible()
+        start_demo(other)
+        opener = other.get_by_test_id("stExpandSidebarButton")
+        if opener.count() and opener.is_visible():  # it may already be open from the upload step
+            opener.click()
+        expect(other.locator("[class*='st-key-hist_']").first).to_be_visible()
+    finally:
+        clean.close()
+
+
+def test_e2e_damaged_backup_is_refused_with_a_message(
+    page: Page, session_server: Server, tmp_path: Path
+) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(session_server.url)
+    open_backup_panel(page)
+    bad = tmp_path / "bad.json"
+    bad.write_text("this is not a backup", encoding="utf-8")
+    page.locator("input[type='file']").last.set_input_files(str(bad))
+    expect(page.get_by_text("not a valid backup")).to_be_visible()
+    expect(page.get_by_text("Traceback")).to_have_count(0)
+
+
+def test_e2e_clearing_the_browser_copy_removes_it(page: Page, session_server: Server) -> None:
+    page.set_default_timeout(LONG)
+    page.goto(session_server.url)
+    run_demo_evaluation(page)
+    wait_for_saved_runs(page, 1)
+    open_backup_panel(page)
+    page.get_by_role("button", name="Clear history saved in this browser").click()
+    deadline = time.time() + 30
+    while stored_history(page) is not None and time.time() < deadline:
+        page.wait_for_timeout(500)
+    assert stored_history(page) is None

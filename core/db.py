@@ -309,8 +309,36 @@ def replace_results(
             conn.execute(
                 "INSERT INTO score_overrides (rfp_run_id, supplier_id, criterion_id,"
                 " original_score, new_score, reason, created_at) VALUES (?,?,?,?,?,?,?)",
-                (run_id, o["supplier_id"], o["criterion_id"], o["original_score"],
-                 o["new_score"], o["reason"], o["created_at"]),
+                (
+                    run_id,
+                    o["supplier_id"],
+                    o["criterion_id"],
+                    o["original_score"],
+                    o["new_score"],
+                    o["reason"],
+                    o["created_at"],
+                ),
+            )
+
+
+def add_override_rows(
+    conn: sqlite3.Connection, run_id: str, rows: Sequence[dict[str, Any]]
+) -> None:
+    """Re-create a run's override audit rows (used when restoring a backup)."""
+    with conn:
+        for o in rows:
+            conn.execute(
+                "INSERT INTO score_overrides (rfp_run_id, supplier_id, criterion_id,"
+                " original_score, new_score, reason, created_at) VALUES (?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    str(o["supplier_id"]),
+                    int(o["criterion_id"]),
+                    o.get("original_score"),
+                    int(o["new_score"]),
+                    str(o["reason"]),
+                    str(o["created_at"]),
+                ),
             )
 
 
@@ -329,7 +357,9 @@ def list_overrides(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]
     """The audit trail for a run, oldest first."""
     rows = conn.execute(
         "SELECT supplier_id, criterion_id, original_score, new_score, reason, created_at"
-        " FROM score_overrides WHERE rfp_run_id = ? ORDER BY id", (run_id,))
+        " FROM score_overrides WHERE rfp_run_id = ? ORDER BY id",
+        (run_id,),
+    )
     return [dict(r) for r in rows]
 
 

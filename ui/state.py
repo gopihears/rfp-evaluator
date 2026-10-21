@@ -19,7 +19,7 @@ STEP_LABELS = {"connect": "Connect", "criteria": "Criteria", "suppliers": "Suppl
 # Keys that make up an authenticated session; cleared together on Disconnect.
 SESSION_KEYS = ["provider", "models", "model", "key_hint", "uploads", "seen_files", "outcome",
                 "viewing_export", "running", "notice", "step", "demo_loaded", "crit_base",
-                "crit_ver", "_db"]
+                "crit_ver", "_db", "_restored", "_db_version", "_saved_version"]
 
 
 @st.cache_resource(show_spinner=False)
@@ -107,6 +107,17 @@ def disconnect() -> None:
     for key in SESSION_KEYS:
         st.session_state.pop(key, None)
     init()
+
+
+def mark_dirty() -> None:
+    """Record that saved data changed, so the browser copy is refreshed."""
+    st.session_state["_db_version"] = st.session_state.get("_db_version", 0) + 1
+
+
+def drop_criteria_cache() -> None:
+    """Make the criteria editor reload from the database (after a restore)."""
+    for key in ("crit_base", "crit_ver"):
+        st.session_state.pop(key, None)
 
 
 def goto(step: str) -> None:

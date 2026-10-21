@@ -86,7 +86,7 @@ def test_disconnect_wipes_the_session_database(
     a = _session_app(monkeypatch, tmp_path, "session")
     _finish_a_run(a)
     a.button(key="disconnect_top").click().run()
-    assert "_db" not in a.session_state
+    assert db.list_runs(a.session_state["_db"]) == []  # a fresh, empty database
     a.button(key="start_demo").click().run()
     assert _history_buttons(a) == []
 

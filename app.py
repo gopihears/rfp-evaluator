@@ -9,7 +9,7 @@ import streamlit as st
 
 from core import db
 from core.tools.provider_factory import demo_mode
-from ui import connect, criteria, results, state, suppliers, theme
+from ui import backup_ui, connect, criteria, results, state, suppliers, theme
 
 st.set_page_config(page_title="RFP Evaluator", page_icon="📊", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -49,24 +49,25 @@ def _stepper() -> None:
 
 
 def _sidebar() -> None:
-    if not state.connected():
-        return
-    with st.sidebar:
-        st.markdown("### Past runs")
-        conn = state.conn()
-        runs = db.list_runs(conn)[:15]
-        if not runs:
-            st.caption("No runs yet.")
-        for r in runs:
-            label = f"{r['created_at'][:16].replace('T', ' ')} · {r['status'].title()}"
-            if st.button(label, key=f"hist_{r['rfp_run_id']}", width="stretch"):
-                export = db.load_run_export(conn, r["rfp_run_id"])
-                if export is None:
-                    state.notice("That run is still in progress or has no saved result.", "warning")
-                else:
-                    st.session_state["viewing_export"] = export
-                    state.goto("results")
-                st.rerun()
+    if state.connected():
+        with st.sidebar:
+            st.markdown("### Past runs")
+            conn = state.conn()
+            runs = db.list_runs(conn)[:15]
+            if not runs:
+                st.caption("No runs yet.")
+            for r in runs:
+                label = f"{r['created_at'][:16].replace('T', ' ')} · {r['status'].title()}"
+                if st.button(label, key=f"hist_{r['rfp_run_id']}", width="stretch"):
+                    export = db.load_run_export(conn, r["rfp_run_id"])
+                    if export is None:
+                        state.notice("That run is still in progress or has no saved result.",
+                                     "warning")
+                    else:
+                        st.session_state["viewing_export"] = export
+                        state.goto("results")
+                    st.rerun()
+    backup_ui.sidebar()
 
 
 def main() -> None:
@@ -74,6 +75,7 @@ def main() -> None:
     if ss.get("running"):  # a previous run was interrupted (for example by the Cancel button)
         ss["running"] = False
         state.notice("The previous evaluation was cancelled before it finished.", "warning")
+    backup_ui.sync()  # restore saved history from this browser, save after changes
     _top_bar()
     _stepper()
     _sidebar()

@@ -88,6 +88,7 @@ h1, h2, h3 {{ letter-spacing: -0.01em; }}
   .rfp-podium {{ grid-template-columns:1fr; }}
   .block-container {{ padding-left:1rem; padding-right:1rem; }}
 }}
+iframe[title="rfp_local_store.rfp_local_store"] {{ height:0; width:0; border:0; display:block; }}
 @media (prefers-reduced-motion: reduce) {{ * {{ transition:none !important; animation:none !important; }} }}
 </style>
 """

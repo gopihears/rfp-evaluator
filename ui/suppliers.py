@@ -302,6 +302,7 @@ def _run(entries: list[Entry], options: RunOptions, conn: Any, cfg: Any) -> None
     if outcome is None:
         return
     ss["outcome"], ss["viewing_export"] = outcome, outcome.export
+    state.mark_dirty()
     state.goto("results")
     st.rerun()
 

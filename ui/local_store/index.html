@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>rfp local store</title></head>
+<body>
+<script>
+// A tiny Streamlit component with no UI. It keeps one string (the history bundle) in this
+// browser's IndexedDB, so it survives server restarts and new sessions. Nothing leaves the browser
+// except through the Streamlit connection that sent the request.
+const DB_NAME = "rfp-evaluator", STORE = "kv", KEY = "history";
+let lastToken = null;
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function withStore(mode, fn) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, mode);
+    const request = fn(tx.objectStore(STORE));
+    request.onsuccess = () => resolve(request.result === undefined ? null : request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+const readHistory = () => withStore("readonly", (s) => s.get(KEY));
+const writeHistory = (value) => withStore("readwrite", (s) => s.put(value, KEY));
+const clearHistory = () => withStore("readwrite", (s) => s.delete(KEY));
+
+function post(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+function reply(value) {
+  post("streamlit:setComponentValue", { value: value, dataType: "json" });
+}
+
+window.addEventListener("message", async (event) => {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  const args = event.data.args || {};
+  if (!args.action || args.token === lastToken) return;  // act once per request
+  lastToken = args.token;
+  try {
+    if (args.action === "load") {
+      const data = await readHistory();
+      reply({ action: "load", token: args.token, ok: true, found: data !== null, data: data });
+    } else if (args.action === "save") {
+      await writeHistory(args.payload);
+      reply({ action: "save", token: args.token, ok: true, bytes: (args.payload || "").length });
+    } else if (args.action === "clear") {
+      await clearHistory();
+      reply({ action: "clear", token: args.token, ok: true });
+    }
+  } catch (err) {
+    reply({ action: args.action, token: args.token, ok: false, error: String(err) });
+  }
+});
+
+post("streamlit:componentReady", { apiVersion: 1 });
+post("streamlit:setFrameHeight", { height: 0 });
+</script>
+</body>
+</html>

@@ -112,3 +112,23 @@ Remove-Item Env:\OPENROUTER_API_KEY
 ```
 
 Set `RFP_PROVIDER=openrouter` to make OpenRouter the default choice in the app.
+
+## 6. Optional: shared, persistent history on a hosted app
+
+By default a hosted app keeps each visitor's data private and temporary (section 2). To keep one **shared** history that every visitor
+can see, add these to the app's **Secrets** (Advanced settings):
+
+```toml
+RFP_DB_MODE = "file"
+RFP_DB_PATH = "/tmp/rfp.db"
+```
+
+What this means, so you can decide knowingly:
+
+- **Everyone with the link sees every run**, including quotes taken from uploaded proposals, and can edit the shared criteria and
+  weights. Only use it for non-confidential material, or restrict the app to named viewers in its sharing settings. The Connect screen
+  shows a warning while this mode is on.
+- **It is not permanent.** The SQLite file lives on the app server's disk. It survives while the app keeps running, but it is lost when
+  the app restarts, sleeps long enough to be recycled, or is redeployed. Download the JSON of anything you must keep.
+- Anyone can remove a run: **Results → Run details → Delete this run**.
+- For history that survives restarts, the app would need an external database such as hosted Postgres; the code is written for SQLite today.

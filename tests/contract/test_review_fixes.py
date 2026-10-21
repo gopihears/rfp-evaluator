@@ -239,3 +239,61 @@ def test_host_detection_treats_localhost_variants_as_local(
         assert not state._is_local_host()
     monkeypatch.setattr(state.st, "context", SimpleNamespace(headers=None))
     assert state._is_local_host()  # unknown host (e.g. test harness) is treated as local
+
+
+# ---- shared history: deleting a run, and the warning visitors see
+
+
+def test_delete_run_removes_everything_stored_under_it(synthetic_dir: Path) -> None:
+    from core.overrides import OverrideRequest, apply_overrides
+
+    conn = new_conn()
+    _, keep = run(conn, uploads(synthetic_dir, ["nexaworks.pdf"]))
+    _, gone = run(conn, uploads(synthetic_dir))
+    apply_overrides(conn, gone.run_id, [OverrideRequest("s0", 1, 9, "checked on site")])
+    assert db.delete_run(conn, gone.run_id) is True
+    for table in ("supplier_results", "criterion_scores", "run_warnings", "score_overrides",
+                  "run_criteria_snapshot"):
+        left = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE rfp_run_id = ?", (gone.run_id,)
+        ).fetchone()[0]
+        assert left == 0, table
+    assert db.load_run_export(conn, gone.run_id) is None
+    assert db.load_run_export(conn, keep.run_id) is not None  # other runs untouched
+    assert db.delete_run(conn, gone.run_id) is False  # already gone
+
+
+def test_delete_button_needs_confirmation_and_removes_the_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    at = _session_app(monkeypatch, tmp_path, "file")
+    _finish_a_run(at)
+    assert len(_history_buttons(at)) == 1
+    assert at.button(key="delete_run").disabled  # not until the box is ticked
+    at.checkbox(key="confirm_delete").set_value(True).run()
+    assert not at.button(key="delete_run").disabled
+    at.button(key="delete_run").click().run()
+    assert not at.exception
+    assert at.session_state["step"] == "suppliers" and "viewing_export" not in at.session_state
+    assert _history_buttons(at) == []
+    assert any("was deleted" in s.value for s in at.success)
+
+
+def test_shared_history_on_a_hosted_address_shows_a_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ui import state
+
+    monkeypatch.setattr(state, "_is_local_host", lambda: False)
+    monkeypatch.delenv("RFP_FAKE_LLM", raising=False)  # demo mode skips the key panel
+    monkeypatch.setenv("RFP_DB_PATH", str(tmp_path / "shared.db"))
+    monkeypatch.setenv("RFP_DB_MODE", "file")  # the explicit opt-in to shared history
+    at = AppTest.from_file(str(APP), default_timeout=90)
+    at.run()
+    assert not at.exception, at.exception
+    assert any("Shared history is on" in w.value for w in at.warning)
+    monkeypatch.setenv("RFP_DB_MODE", "session")
+    again = AppTest.from_file(str(APP), default_timeout=90)
+    again.run()
+    assert not any("Shared history is on" in w.value for w in again.warning)
+    assert any("private to this browser session" in c.value for c in again.caption)

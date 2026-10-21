@@ -314,6 +314,17 @@ def replace_results(
             )
 
 
+def delete_run(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Permanently remove a run and everything stored under it (results, warnings, overrides).
+
+    Needed when history is shared between visitors: anyone can remove a run they no longer want
+    kept. Returns False when the run does not exist.
+    """
+    with conn:
+        deleted = conn.execute("DELETE FROM rfp_runs WHERE rfp_run_id = ?", (run_id,)).rowcount
+    return deleted > 0
+
+
 def list_overrides(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
     """The audit trail for a run, oldest first."""
     rows = conn.execute(

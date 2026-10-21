@@ -140,6 +140,11 @@ def render() -> None:
                 "Your criteria, runs and results are private to this browser session and "
                 "are not stored on the server. They disappear when the session ends."
             )
+        elif state.is_hosted():
+            st.warning("**Shared history is on.** Every visitor with this link can see all saved "
+                       "runs, including the quotes taken from uploaded proposals, and can change "
+                       "the shared criteria. Do not upload confidential proposals here. Anyone can "
+                       "delete a run from its Run details tab.")
         else:
             st.caption("Runs and criteria are saved in a local database file on this machine.")
         if not state.connected():

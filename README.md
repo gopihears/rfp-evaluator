@@ -10,7 +10,7 @@ explainable, deterministic leaderboard.
 **Status:** feature-complete for the brief and the Should tier, working end to end. Streamlit app (connect, criteria,
 suppliers with live progress, leaderboard, scorecards, compare, run details, history, JSON export), long-document retrieval,
 formula criteria, knock-outs, analyst overrides with an audit trail, an eval harness, and hosting support.
-420 tests (19 in a real browser), 98 % core coverage, lint and strict types clean.
+423 tests (19 in a real browser), 98 % core coverage, lint and strict types clean.
 
 **Honest caveats:** the OpenAI path has not been run against the live API from this repository (it is tested with stand-ins and an
 offline scorer), so scoring quality on real models is unmeasured; run `python -m core.evals --provider openai` with your key to measure it.

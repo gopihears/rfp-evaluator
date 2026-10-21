@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from core import db
 from core.export import export_json
 from core.overrides import OverrideError, OverrideRequest, apply_overrides
 from ui import charts, state, theme
@@ -316,6 +317,20 @@ def _details(export: dict[str, Any]) -> None:
     st.download_button("Download full result (JSON)", data=export_json(export),
                        file_name=f"rfp_run_{export['rfp_run_id'][:8]}.json", mime="application/json",
                        type="primary", key="download_json")
+
+    with st.expander("Delete this run"):
+        st.caption("Removes the run, its scores and its audit trail from the database for good. "
+                   "Download the JSON first if you want to keep a copy.")
+        sure = st.checkbox("I understand this cannot be undone", key="confirm_delete")
+        if st.button("Delete permanently", disabled=not sure, key="delete_run"):
+            if db.delete_run(state.conn(), export["rfp_run_id"]):
+                for key in ("outcome", "viewing_export", "confirm_delete"):
+                    st.session_state.pop(key, None)
+                state.goto("suppliers")
+                state.notice("The run was deleted.", "success")
+            else:
+                state.notice("That run no longer exists.", "warning")
+            st.rerun()
 
     opts = export.get("options", {})
     mode = {"auto": "automatic", "full": "full document", "retrieve": "passage search"}.get(

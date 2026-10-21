@@ -42,6 +42,11 @@ def _is_local_host() -> bool:
     return host in ("", "localhost", "127.0.0.1", "[::1]", "::1")
 
 
+def is_hosted() -> bool:
+    """True when the app is reached through a non-localhost address."""
+    return not _is_local_host()
+
+
 def effective_db_mode() -> str:
     """'session' (private, in memory) or 'file' (shared SQLite file).
 

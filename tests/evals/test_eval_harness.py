@@ -19,6 +19,27 @@ def test_kendall_tau() -> None:
     assert evals.kendall_tau(["a", "b", "c"], ["a", "c", "b"]) == pytest.approx(1 / 3)
 
 
+def test_kendall_tau_ignores_pairs_the_ground_truth_calls_a_tie() -> None:
+    scores = {"apex": 78.0, "nexa": 76.0, "orbit": 48.0, "bright": 39.0}
+    expected = ["apex", "nexa", "orbit", "bright"]
+    swapped_tie = ["nexa", "apex", "orbit", "bright"]
+    assert evals.kendall_tau(expected, swapped_tie) == pytest.approx(2 / 3)  # strict: penalised
+    assert evals.kendall_tau(expected, swapped_tie, scores, evals.TIE_MARGIN) == 1.0
+    wrong = ["apex", "nexa", "bright", "orbit"]  # orbit/bright differ by 9: also a near tie
+    assert evals.kendall_tau(expected, wrong, scores, evals.TIE_MARGIN) == 1.0
+    really_wrong = ["bright", "orbit", "nexa", "apex"]
+    assert evals.kendall_tau(expected, really_wrong, scores, evals.TIE_MARGIN) < 0
+
+
+def test_report_shows_the_orders_that_were_compared(synthetic_dir: Path) -> None:
+    report = evals.run_suite(FakeProvider(demo_responder), "demo-model", synthetic_dir)
+    d = report["details"]
+    assert d["expected_order"] == d["actual_order"] or set(d["expected_order"]) == set(
+        d["actual_order"]
+    )
+    assert "Apex Systems / NexaWorks" in d["near_ties_ignored"]
+
+
 def test_suite_with_the_demo_scorer_meets_every_threshold(synthetic_dir: Path) -> None:
     report = evals.run_suite(FakeProvider(demo_responder), "demo-model", synthetic_dir)
     assert report["all_passed"], report["passes"]

@@ -82,10 +82,26 @@ def _errors(export: dict[str, Any]) -> list[str]:
     return seen
 
 
-def kendall_tau(expected: list[str], actual: list[str]) -> float:
-    """Rank agreement in [-1, 1] between two orderings of the same items."""
+TIE_MARGIN = 10.0  # expected scores (0-100) closer than this are a tie, not an ordering
+
+
+def kendall_tau(
+    expected: list[str],
+    actual: list[str],
+    scores: dict[str, float] | None = None,
+    margin: float = 0.0,
+) -> float:
+    """Rank agreement in [-1, 1] between two orderings of the same items.
+
+    With `scores`, pairs whose expected scores differ by less than `margin` are ignored: the
+    ground truth does not claim an order between near-ties, so either order is acceptable.
+    """
     pos = {x: i for i, x in enumerate(actual)}
-    pairs = list(itertools.combinations(expected, 2))
+    pairs = [
+        (a, b)
+        for a, b in itertools.combinations(expected, 2)
+        if scores is None or abs(scores[a] - scores[b]) >= margin
+    ]
     concordant = sum(1 for a, b in pairs if pos[a] < pos[b])
     return (2 * concordant - len(pairs)) / len(pairs) if pairs else 1.0
 
@@ -144,7 +160,19 @@ def run_suite(provider: LLMProvider, model: str, data_dir: Path = DATA) -> dict[
     }
     expected_order = [names_by_file[f] for f in sorted(mid_score, key=lambda f: -mid_score[f])]
     actual_order = [r["supplier_name"] for r in out.export["leaderboard"]]
-    m["kendall_tau"] = kendall_tau(expected_order, actual_order) if len(actual_order) == 4 else -1.0
+    expected_scores = {names_by_file[f]: s / 10 for f, s in mid_score.items()}  # 0-100 scale
+    m["kendall_tau"] = (
+        kendall_tau(expected_order, actual_order, expected_scores, TIE_MARGIN)
+        if len(actual_order) == 4
+        else -1.0
+    )
+    report["details"]["expected_order"] = expected_order
+    report["details"]["actual_order"] = actual_order
+    report["details"]["near_ties_ignored"] = [
+        f"{a} / {b}"
+        for a, b in itertools.combinations(expected_order, 2)
+        if abs(expected_scores[a] - expected_scores[b]) < TIE_MARGIN
+    ]
     top = {names_by_file[f] for f in truth["expected_tiers"]["top"]}
     m["top_tier_correct"] = float(set(actual_order[:2]) == top)
 

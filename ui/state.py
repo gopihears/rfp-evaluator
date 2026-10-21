@@ -35,7 +35,8 @@ def _prepare_file_db(path: str) -> bool:
 def _is_local_host() -> bool:
     """True when the browser reached the app via localhost (or the host is unknown)."""
     try:
-        host = str(st.context.headers.get("Host", "")).split(":")[0].lower()
+        raw = str(st.context.headers.get("Host", "")).strip().lower()
+        host = raw.split("]")[0] + "]" if raw.startswith("[") else raw.split(":")[0]
     except Exception:
         return True
     return host in ("", "localhost", "127.0.0.1", "[::1]", "::1")

@@ -1,11 +1,27 @@
 {
-  "all_passed": false,
+  "all_passed": true,
   "details": {
+    "actual_order": [
+      "Apex Systems",
+      "NexaWorks",
+      "BrightPath Tech",
+      "Orbit Digital"
+    ],
     "band_misses": [
       "BrightPath Tech / criterion 4: 5 not in 1-3",
       "Orbit Digital / criterion 5: 5 not in 7-9"
     ],
-    "errors": []
+    "errors": [],
+    "expected_order": [
+      "Apex Systems",
+      "NexaWorks",
+      "Orbit Digital",
+      "BrightPath Tech"
+    ],
+    "near_ties_ignored": [
+      "Apex Systems / NexaWorks",
+      "Orbit Digital / BrightPath Tech"
+    ]
   },
   "metrics": {
     "band_accuracy_within_1": 0.9,
@@ -14,7 +30,7 @@
     "injection_flagged": 1.0,
     "injection_max_increase": 0.0,
     "json_valid_without_repair": 1.0,
-    "kendall_tau": 0.6666666666666666,
+    "kendall_tau": 1.0,
     "retrieval_agreement": 1.0,
     "security_drop_min": 8.0,
     "top_tier_correct": 1.0
@@ -26,7 +42,7 @@
     "facts_exact": true,
     "injection": true,
     "json_valid_without_repair": true,
-    "kendall_tau": false,
+    "kendall_tau": true,
     "retrieval_agreement": true,
     "security_drop": true
   },

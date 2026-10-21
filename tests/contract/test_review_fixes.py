@@ -193,3 +193,49 @@ def test_openai_embed_batches_requests_and_retries() -> None:
     vectors = provider.embed(texts)
     assert [v[0] for v in vectors] == [float(len(t)) for t in texts]
     assert calls == [EMBED_BATCH, EMBED_BATCH, 4]  # first batch retried once after a 429
+
+
+# ---- hosted default: any non-localhost address gets private per-session data
+
+
+@pytest.mark.parametrize(
+    ("env", "local", "expected"),
+    [
+        (None, True, "file"),  # running on your own machine
+        (None, False, "session"),  # e.g. xyz.streamlit.app
+        ("file", False, "file"),  # an explicit choice always wins
+        ("session", True, "session"),
+        ("bogus", False, "session"),  # unknown value is ignored, host decides
+    ],
+)
+def test_effective_db_mode_follows_the_host(
+    monkeypatch: pytest.MonkeyPatch, env: str | None, local: bool, expected: str
+) -> None:
+    from ui import state
+
+    if env is None:
+        monkeypatch.delenv("RFP_DB_MODE", raising=False)
+    else:
+        monkeypatch.setenv("RFP_DB_MODE", env)
+    monkeypatch.setattr(state, "_is_local_host", lambda: local)
+    assert state.effective_db_mode() == expected
+
+
+def test_host_detection_treats_localhost_variants_as_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from ui import state
+
+    def with_host(host: str) -> None:
+        monkeypatch.setattr(state.st, "context", SimpleNamespace(headers={"Host": host}))
+
+    for host in ("localhost:8501", "127.0.0.1:8501", "[::1]:8501", ""):
+        with_host(host)
+        assert state._is_local_host()
+    for host in ("my-app.streamlit.app", "rfp.example.com:443"):
+        with_host(host)
+        assert not state._is_local_host()
+    monkeypatch.setattr(state.st, "context", SimpleNamespace(headers=None))
+    assert state._is_local_host()  # unknown host (e.g. test harness) is treated as local

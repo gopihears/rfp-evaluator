@@ -1,5 +1,5 @@
 # Runtime dependencies (what Streamlit Community Cloud installs)
-streamlit>=1.40
+streamlit>=1.66  # tested version; the UI uses newer width="stretch" arguments
 pymupdf>=1.24
 pydantic>=2.7
 openai>=1.50

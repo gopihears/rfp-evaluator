@@ -1,5 +1,7 @@
 # Architecture
 
+Companion docs: [DIAGRAMS.md](DIAGRAMS.md) (rendered diagrams of everything below), [AGENTS.md](AGENTS.md) (agent and tool roles), [UX_DESIGN.md](UX_DESIGN.md) (screens and visual design), [DESIGN_SPEC.md](DESIGN_SPEC.md).
+
 ## 1. Goals and constraints
 
 | # | Goal | Source |

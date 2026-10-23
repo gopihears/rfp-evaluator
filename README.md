@@ -43,7 +43,10 @@ python -m core.evals --provider demo    # eval harness against the ground-truth 
 | Doc | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, components, data flow, security, deployment |
+| [docs/DIAGRAMS.md](docs/DIAGRAMS.md) | 15 Mermaid diagrams: context, layers, pipeline, sequences, data model, ranking, backup, tests |
+| [docs/AGENTS.md](docs/AGENTS.md) | The agents and tools: roles, inputs/outputs, prompts, guardrails, failure handling |
 | [docs/DESIGN_SPEC.md](docs/DESIGN_SPEC.md) | Detailed design: schemas, prompts, formulas, UI screens, module contracts |
+| [docs/UX_DESIGN.md](docs/UX_DESIGN.md) | UX and visual design: principles, tokens, components, screens with screenshots |
 | [docs/TEST_CASES.md](docs/TEST_CASES.md) | Test strategy, enumerated cases and the as-built status |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Run locally and host on Streamlit Community Cloud; data handling; configuration |
 
